@@ -1,5 +1,6 @@
 import argparse
 import math
+import os
 import random
 from collections import namedtuple
 from itertools import count
@@ -11,13 +12,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
-from PIL import Image
 from gym.wrappers import FrameStack
+from PIL import Image
 
 from replay_buffer import ReplayBuffer
-from wrappers import SkipFrame, GrayScaleObservation, ResizeObservation
-
 from src.env.pacman_env import PacmanEnv
+from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
 
 # if gpu is to be used
 USE_CUDA = torch.cuda.is_available()
@@ -111,11 +111,17 @@ def optimize_model(memory: ReplayBuffer, policy_net, optimizer, target_net, gamm
         return
 
     state, next_state, action, reward, done = memory.sample()
-    state = state.cuda()
-    next_state = next_state.cuda()
-    action = action.cuda()
-    reward = reward.cuda()
-    done = done.cuda()
+    
+    if torch.cuda.is_available():
+        state = state.cuda()
+        next_state = next_state.cuda()
+        action = action.cuda()
+        reward = reward.cuda()
+        done = done.cuda()
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    
     non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
                                             next_state)), device=device, dtype=torch.bool)
 
@@ -151,7 +157,7 @@ def save_model(model, filename):
 
 def load_model(input_dim, output_dim, filename):
     model = DQN(input_dim, output_dim)
-    state_dict = torch.load(filename, map_location="cuda:0")
+    state_dict = torch.load(filename, map_location=device)
     model.load_state_dict(state_dict)
     return model.to(device)
 
@@ -180,10 +186,14 @@ def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
     # Get number of actions from gym action space
     n_actions = env.action_space.n
 
-    policy_net = DQN(screen.shape, n_actions).to(device)
-    target_net = DQN(screen.shape, n_actions).to(device)
-    target_net.load_state_dict(policy_net.state_dict())
-    target_net.eval()
+    if os.path.exists('pacman.pth'):
+        policy_net = load_model(screen.shape, n_actions, 'pacman.pth')
+        target_net = load_model(screen.shape, n_actions, 'pacman.pth')
+    else:
+        policy_net = DQN(screen.shape, n_actions).to(device)
+        target_net = DQN(screen.shape, n_actions).to(device)
+        target_net.load_state_dict(policy_net.state_dict())
+        target_net.eval()
 
     optimizer = optim.RMSprop(policy_net.parameters())
     memory = ReplayBuffer(BATCH_SIZE)
