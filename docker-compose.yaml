@@ -1,0 +1,13 @@
+services:
+  pacman:
+    build: .
+    command: bash
+    develop:
+      watch:
+        - action: sync
+          path: ./
+          target: /app
+          ignore:
+            - pacman-env
+        # - action: rebuild
+        #   path: '**/*.py'

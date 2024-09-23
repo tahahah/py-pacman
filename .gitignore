@@ -16,3 +16,6 @@ try_env.py
 *.npy
 
 neat-checkpoint-*
+
+pacman-env
+pacman_data.hdf5
