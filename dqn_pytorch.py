@@ -6,6 +6,7 @@ from collections import namedtuple
 from itertools import count
 
 import gym
+import h5py
 import numpy as np
 import torch
 import torch.nn as nn
@@ -168,7 +169,7 @@ def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
     EPS_END = 0.1
     EPS_DECAY = 1e7
     TARGET_UPDATE = 10
-    BATCH_SIZE = 64
+    BATCH_SIZE = 32
 
     epsilon_by_frame = lambda frame_idx: EPS_END + (EPSILON - EPS_END) * math.exp(
         -1. * frame_idx / EPS_DECAY)
@@ -198,6 +199,35 @@ def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
     optimizer = optim.RMSprop(policy_net.parameters())
     memory = ReplayBuffer(BATCH_SIZE)
 
+    # Initialize lists to temporarily store data
+    frames_buffer = []
+    actions_buffer = []
+    next_frames_buffer = []
+    dones_buffer = []
+
+    # Function to save buffered data to HDF5 file
+    def save_to_hdf5():
+        with h5py.File('pacman_dataset.h5', 'a') as hdf:
+            if 'frames' not in hdf:
+                frame_shape = frames_buffer[0].shape
+                hdf.create_dataset('frames', data=np.array(frames_buffer), maxshape=(None, *frame_shape), chunks=True, compression="gzip")
+                hdf.create_dataset('actions', data=np.array(actions_buffer), maxshape=(None,), chunks=True, compression="gzip")
+                hdf.create_dataset('next_frames', data=np.array(next_frames_buffer), maxshape=(None, *frame_shape), chunks=True, compression="gzip")
+                hdf.create_dataset('dones', data=np.array(dones_buffer), maxshape=(None,), chunks=True, compression="gzip")
+            else:
+                for name, data in zip(['frames', 'actions', 'next_frames', 'dones'], 
+                                      [frames_buffer, actions_buffer, next_frames_buffer, dones_buffer]):
+                    dataset = hdf[name]
+                    current_len = dataset.shape[0]
+                    dataset.resize((current_len + len(data), *dataset.shape[1:]))
+                    dataset[current_len:] = data
+        print("Saved to hdf5 ", actions_buffer)
+        # Clear buffers
+        frames_buffer.clear()
+        actions_buffer.clear()
+        next_frames_buffer.clear()
+        dones_buffer.clear()
+
     for i_episode in range(episodes):
         # Initialize the environment and state
         state = env.reset(mode='rgb_array')
@@ -205,12 +235,24 @@ def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
         EPSILON = epsilon_by_frame(i_episode)
 
         for t in count():
+            # Render the current frame
+            current_frame = env.render(mode='rgb_array')
+
             # Select and perform an action
             env.render(mode='human')
             action = select_action(state, EPSILON, policy_net, n_actions)
             next_state, reward, done, info = env.step(action)
             reward = max(-1.0, min(reward, 1.0))
             ep_reward += reward
+            
+            # Render the next frame
+            next_frame = env.render(mode='rgb_array')
+
+            # Append data to buffers
+            frames_buffer.append(current_frame)
+            actions_buffer.append(action)
+            next_frames_buffer.append(next_frame)
+            dones_buffer.append(done)
 
             memory.cache(state, next_state, action, reward, done)
 
@@ -230,8 +272,16 @@ def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
         if i_episode % TARGET_UPDATE == 0:
             target_net.load_state_dict(policy_net.state_dict())
 
+        # Save data to HDF5 file every 10 episodes
+        if i_episode % 2 == 0 and i_episode > 0:
+            save_to_hdf5()
+
         if i_episode % 1000 == 0:
             save_model(target_net, 'pacman.pth')
+
+    # Save any remaining data
+    if frames_buffer:
+        save_to_hdf5()
 
     print('Complete')
     env.render()
