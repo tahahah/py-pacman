@@ -1,6 +1,8 @@
 import argparse
+import concurrent.futures
 import math
 import os
+import queue
 import random
 from collections import namedtuple
 from itertools import count
@@ -13,12 +15,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
+from dotenv import load_dotenv
 from gym.wrappers import FrameStack
 from PIL import Image
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
 from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Get HF_TOKEN from environment variables
+HF_TOKEN = os.getenv('HF_TOKEN')
+
 
 # if gpu is to be used
 USE_CUDA = torch.cuda.is_available()
@@ -163,6 +173,9 @@ def load_model(input_dim, output_dim, filename):
     return model.to(device)
 
 
+from datasets import Dataset, DatasetDict
+
+
 def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
     GAMMA = 0.99
     EPSILON = 1.0
@@ -205,28 +218,23 @@ def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
     next_frames_buffer = []
     dones_buffer = []
 
-    # Function to save buffered data to HDF5 file
-    def save_to_hdf5():
-        with h5py.File('pacman_dataset.h5', 'a') as hdf:
-            if 'frames' not in hdf:
-                frame_shape = frames_buffer[0].shape
-                hdf.create_dataset('frames', data=np.array(frames_buffer), maxshape=(None, *frame_shape), chunks=True, compression="gzip")
-                hdf.create_dataset('actions', data=np.array(actions_buffer), maxshape=(None,), chunks=True, compression="gzip")
-                hdf.create_dataset('next_frames', data=np.array(next_frames_buffer), maxshape=(None, *frame_shape), chunks=True, compression="gzip")
-                hdf.create_dataset('dones', data=np.array(dones_buffer), maxshape=(None,), chunks=True, compression="gzip")
-            else:
-                for name, data in zip(['frames', 'actions', 'next_frames', 'dones'], 
-                                      [frames_buffer, actions_buffer, next_frames_buffer, dones_buffer]):
-                    dataset = hdf[name]
-                    current_len = dataset.shape[0]
-                    dataset.resize((current_len + len(data), *dataset.shape[1:]))
-                    dataset[current_len:] = data
-        print("Saved to hdf5 ", actions_buffer)
-        # Clear buffers
-        frames_buffer.clear()
-        actions_buffer.clear()
-        next_frames_buffer.clear()
-        dones_buffer.clear()
+    save_queue = queue.Queue()
+
+    # Function to save buffered data to Hugging Face dataset
+    def save_to_hf_dataset(data):
+        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = data
+        dataset_dict = {
+            'frames': frames_buffer,
+            'actions': actions_buffer,
+            'next_frames': next_frames_buffer,
+            'dones': dones_buffer
+        }
+        dataset = Dataset.from_dict(dataset_dict)
+        dataset.push_to_hub('pacman_dataset', split='train', token=HF_TOKEN)
+        print("Saved to Hugging Face dataset")
+
+    # Create a thread pool executor with multiple workers
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
     for i_episode in range(episodes):
         # Initialize the environment and state
@@ -272,16 +280,28 @@ def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
         if i_episode % TARGET_UPDATE == 0:
             target_net.load_state_dict(policy_net.state_dict())
 
-        # Save data to HDF5 file every 10 episodes
+        # Save data to Hugging Face dataset every 10 episodes
         if i_episode % 2 == 0 and i_episode > 0:
-            save_to_hdf5()
+            # Put a copy of the current buffers into the queue
+            save_queue.put((frames_buffer.copy(), actions_buffer.copy(), next_frames_buffer.copy(), dones_buffer.copy()))
+            # Clear the original buffers
+            frames_buffer.clear()
+            actions_buffer.clear()
+            next_frames_buffer.clear()
+            dones_buffer.clear()
+            # Submit the save task to the executor
+            executor.submit(save_to_hf_dataset, save_queue.get())
 
         if i_episode % 1000 == 0:
             save_model(target_net, 'pacman.pth')
 
     # Save any remaining data
     if frames_buffer:
-        save_to_hdf5()
+        save_queue.put((frames_buffer.copy(), actions_buffer.copy(), next_frames_buffer.copy(), dones_buffer.copy()))
+        executor.submit(save_to_hf_dataset, save_queue.get())
+
+    # Shutdown the executor
+    executor.shutdown(wait=True)
 
     print('Complete')
     env.render()

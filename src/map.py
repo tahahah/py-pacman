@@ -1,21 +1,14 @@
 import os
-from typing import Tuple, List, Dict
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pygame as pg
 
-from .constants import STATE_LOOKUP_TABLE, \
-    TILE_LOOKUP_TABLE, \
-    TILE_SIZE, \
-    EDGE_LIGHT_COLOR, \
-    EDGE_SHADOW_COLOR, \
-    FILL_COLOR, \
-    PELLET_COLOR, \
-    WHITE_EDGE_LIGHT_COLOR, \
-    WHITE_EDGE_SHADOW_COLOR, \
-    WHITE_FILL_COLOR, \
-    STATE_COLOR_LOOKUP_TABLE, \
-    ROOT_DIR, GHOST_VALUE, GHOST_VULNERABLE_VALUE
+from .constants import (EDGE_LIGHT_COLOR, EDGE_SHADOW_COLOR, FILL_COLOR,
+                        GHOST_VALUE, GHOST_VULNERABLE_VALUE, PELLET_COLOR,
+                        ROOT_DIR, STATE_COLOR_LOOKUP_TABLE, STATE_LOOKUP_TABLE,
+                        TILE_LOOKUP_TABLE, TILE_SIZE, WHITE_EDGE_LIGHT_COLOR,
+                        WHITE_EDGE_SHADOW_COLOR, WHITE_FILL_COLOR)
 from .utils.functions import get_image_surface
 from .utils.ghost_state import GhostState
 
@@ -111,7 +104,8 @@ class Map:
                 self.recolor_tile(self.tile_map[i, j])
 
     def matrix_from_lookup_table(self, lookup_table: Dict[int, int]) -> np.ndarray:
-        matrix = np.ndarray(shape=(self.map_matrix.shape[0], self.map_matrix.shape[1])).astype(np.int)
+        # Using np.empty with dtype=int to avoid uninitialized values and casting issues
+        matrix = np.empty(shape=(self.map_matrix.shape[0], self.map_matrix.shape[1]), dtype=int)
 
         for i in range(self.map_matrix.shape[0]):
             for j in range(self.map_matrix.shape[1]):
