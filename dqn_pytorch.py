@@ -3,12 +3,10 @@ import concurrent.futures
 import math
 import os
 import queue
-import random
 from collections import namedtuple
 from itertools import count
 
 import gym
-import h5py
 import numpy as np
 import torch
 import torch.nn as nn
@@ -18,6 +16,7 @@ import torchvision.transforms as T
 from dotenv import load_dotenv
 from gym.wrappers import FrameStack
 from PIL import Image
+from datasets import Dataset
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
@@ -29,39 +28,14 @@ load_dotenv()
 # Get HF_TOKEN from environment variables
 HF_TOKEN = os.getenv('HF_TOKEN')
 
-
 # if gpu is to be used
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
 
-Transition = namedtuple('Transition',
-                        ('state', 'action', 'next_state', 'reward'))
-steps_done = 0
-
-
-class ReplayMemory(object):
-
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.memory = []
-        self.position = 0
-
-    def push(self, *args):
-        """Saves a transition."""
-        if len(self.memory) < self.capacity:
-            self.memory.append(None)
-        self.memory[self.position] = Transition(*args)
-        self.position = (self.position + 1) % self.capacity
-
-    def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
-
-    def __len__(self):
-        return len(self.memory)
+Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
 
 class DQN(nn.Module):
-
     def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()
         c, h, w = input_dim
@@ -82,258 +56,197 @@ class DQN(nn.Module):
         return self.net(x)
 
 
-resize = T.Compose([T.ToPILImage(),
-                    T.Resize(40, interpolation=Image.CUBIC),
-                    T.ToTensor()])
+class PacmanAgent:
+    def __init__(self, input_dim, output_dim):
+        self.policy_net = DQN(input_dim, output_dim).to(device)
+        self.target_net = DQN(input_dim, output_dim).to(device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
+        self.optimizer = optim.RMSprop(self.policy_net.parameters())
+        self.steps_done = 0
 
-
-def select_action(state, epsilon, policy_net, n_actions):
-    """
-     Given a state, choose an epsilon-greedy action and update value of step.
-
-     Inputs:
-     state(LazyFrame): A single observation of the current state, dimension is (state_dim)
-     Outputs:
-     action_idx (int): An integer representing which action Mario will perform
-     """
-    global steps_done
-    # EXPLORE
-    if np.random.rand() < epsilon:
-        action_idx = np.random.randint(n_actions)
-
-    # EXPLOIT
-    else:
-        state = state.__array__()
-        if USE_CUDA:
-            state = torch.tensor(state).cuda()
+    def select_action(self, state, epsilon, n_actions):
+        if np.random.rand() < epsilon:
+            return np.random.randint(n_actions)
         else:
-            state = torch.tensor(state)
-        state = state.unsqueeze(0)
-        action_values = policy_net(state)
-        action_idx = torch.argmax(action_values, axis=1).item()
+            with torch.no_grad():
+                state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
+                return self.policy_net(state).max(1)[1].item()
 
-    # increment step
-    steps_done += 1
-    return action_idx
+    def optimize_model(self, memory, gamma):
+        if self.steps_done < 1e3:
+            return
 
+        state, next_state, action, reward, done = memory.sample()
+        
+        state = state.to(device)
+        next_state = next_state.to(device)
+        action = action.to(device)
+        reward = reward.to(device)
+        done = done.to(device)
 
-def optimize_model(memory: ReplayBuffer, policy_net, optimizer, target_net, gamma):
-    if steps_done < 1e3:
-        return
+        state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
 
-    state, next_state, action, reward, done = memory.sample()
-    
-    if torch.cuda.is_available():
-        state = state.cuda()
-        next_state = next_state.cuda()
-        action = action.cuda()
-        reward = reward.cuda()
-        done = done.cuda()
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-    
-    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
-                                            next_state)), device=device, dtype=torch.bool)
+        next_state_values = torch.zeros(memory.batch_size, device=device)
+        with torch.no_grad():
+            next_state_values[~done] = self.target_net(next_state).max(1)[0].detach()
 
-    # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
-    # columns of actions taken. These are the actions which would've been taken
-    # for each batch state according to policy_net
-    state_action_values = policy_net(state).gather(1, action.unsqueeze(1))
+        expected_state_action_values = (next_state_values * gamma) + reward
 
-    # Compute V(s_{t+1}) for all next states.
-    # Expected values of actions for non_final_next_states are computed based
-    # on the "older" target_net; selecting their best reward with max(1)[0].
-    # This is merged based on the mask, such that we'll have either the expected
-    # state value or 0 in case the state was final.
-    next_state_values = torch.zeros(memory.batch_size, device=device)
-    next_state_values[non_final_mask] = target_net(next_state).max(1)[0].detach()
-    # Compute the expected Q values
-    expected_state_action_values = (next_state_values * gamma) + reward
+        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
 
-    # Compute Huber loss
-    loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
+        self.optimizer.zero_grad()
+        loss.backward()
+        for param in self.policy_net.parameters():
+            param.grad.data.clamp_(-1, 1)
+        self.optimizer.step()
 
-    # Optimize the model
-    optimizer.zero_grad()
-    loss.backward()
-    for param in policy_net.parameters():
-        param.grad.data.clamp_(-1, 1)
-    optimizer.step()
+    def update_target_network(self):
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save_model(self, filename):
+        torch.save(self.policy_net.state_dict(), filename)
+
+    @classmethod
+    def load_model(cls, input_dim, output_dim, filename):
+        agent = cls(input_dim, output_dim)
+        state_dict = torch.load(filename, map_location=device)
+        agent.policy_net.load_state_dict(state_dict)
+        agent.target_net.load_state_dict(state_dict)
+        return agent
 
 
-def save_model(model, filename):
-    torch.save(model.state_dict(), filename)
+class PacmanTrainer:
+    def __init__(self, layout, episodes, frames_to_skip):
+        self.layout = layout
+        self.episodes = episodes
+        self.frames_to_skip = frames_to_skip
+        self.env = self._create_environment()
+        self.agent = None
+        self.memory = None
+        self.save_queue = queue.Queue()
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
+    def _create_environment(self):
+        env = PacmanEnv(layout=self.layout)
+        env = SkipFrame(env, skip=self.frames_to_skip)
+        env = GrayScaleObservation(env)
+        env = ResizeObservation(env, shape=84)
+        env = FrameStack(env, num_stack=4)
+        return env
 
-def load_model(input_dim, output_dim, filename):
-    model = DQN(input_dim, output_dim)
-    state_dict = torch.load(filename, map_location=device)
-    model.load_state_dict(state_dict)
-    return model.to(device)
+    def train(self):
+        screen = self.env.reset(mode='rgb_array')
+        n_actions = self.env.action_space.n
 
+        self.agent = PacmanAgent(screen.shape, n_actions)
+        self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
 
-from datasets import Dataset, DatasetDict
+        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
 
+        for i_episode in range(self.episodes):
+            state = self.env.reset(mode='rgb_array')
+            ep_reward = 0.
+            epsilon = self._get_epsilon(i_episode)
 
-def train_agent(layout: str, episodes: int = 10000, frames_to_skip: int = 4):
-    GAMMA = 0.99
-    EPSILON = 1.0
-    EPS_END = 0.1
-    EPS_DECAY = 1e7
-    TARGET_UPDATE = 10
-    BATCH_SIZE = 32
+            for t in count():
+                current_frame = self.env.render(mode='rgb_array')
+                self.env.render(mode='human')
 
-    epsilon_by_frame = lambda frame_idx: EPS_END + (EPSILON - EPS_END) * math.exp(
-        -1. * frame_idx / EPS_DECAY)
+                action = self.agent.select_action(state, epsilon, n_actions)
+                next_state, reward, done, _ = self.env.step(action)
+                reward = max(-1.0, min(reward, 1.0))
+                ep_reward += reward
 
-    # Get screen size so that we can initialize layers correctly based on shape
-    # returned from AI gym. Typical dimensions at this point are close to 3x40x90
-    # which is the result of a clamped and down-scaled render buffer in get_screen()
-    env = PacmanEnv(layout=layout)
-    env = SkipFrame(env, skip=frames_to_skip)
-    env = GrayScaleObservation(env)
-    env = ResizeObservation(env, shape=84)
-    env = FrameStack(env, num_stack=4)
-    screen = env.reset(mode='rgb_array')
+                next_frame = self.env.render(mode='rgb_array')
 
-    # Get number of actions from gym action space
-    n_actions = env.action_space.n
+                frames_buffer.append(current_frame)
+                actions_buffer.append(action)
+                next_frames_buffer.append(next_frame)
+                dones_buffer.append(done)
 
-    if os.path.exists('pacman.pth'):
-        policy_net = load_model(screen.shape, n_actions, 'pacman.pth')
-        target_net = load_model(screen.shape, n_actions, 'pacman.pth')
-    else:
-        policy_net = DQN(screen.shape, n_actions).to(device)
-        target_net = DQN(screen.shape, n_actions).to(device)
-        target_net.load_state_dict(policy_net.state_dict())
-        target_net.eval()
+                self.memory.cache(state, next_state, action, reward, done)
 
-    optimizer = optim.RMSprop(policy_net.parameters())
-    memory = ReplayBuffer(BATCH_SIZE)
+                state = next_state if not done else None
 
-    # Initialize lists to temporarily store data
-    frames_buffer = []
-    actions_buffer = []
-    next_frames_buffer = []
-    dones_buffer = []
+                self.agent.optimize_model(self.memory, gamma=0.99)
+                if done:
+                    print(f"Episode #{i_episode}, lasts for {t + 1} timestep, total reward: {ep_reward}")
+                    break
 
-    save_queue = queue.Queue()
+            if i_episode % 10 == 0:
+                self.agent.update_target_network()
 
-    # Function to save buffered data to Hugging Face dataset
-    def save_to_hf_dataset(data):
-        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = data
+            if i_episode % 2 == 0 and i_episode > 0:
+                self._save_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+
+            if i_episode % 1000 == 0:
+                self.agent.save_model('pacman.pth')
+
+        self._save_remaining_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+        self.executor.shutdown(wait=True)
+
+        print('Training Complete')
+        self.env.close()
+        self.agent.save_model('pacman.pth')
+
+    def _get_epsilon(self, frame_idx):
+        return 0.1 + (1.0 - 0.1) * math.exp(-1. * frame_idx / 1e7)
+
+    def _save_data(self, frames, actions, next_frames, dones):
+        self.save_queue.put((frames.copy(), actions.copy(), next_frames.copy(), dones.copy()))
+        self.executor.submit(self._save_to_hf_dataset, self.save_queue.get())
+
+    def _save_remaining_data(self, frames, actions, next_frames, dones):
+        if frames:
+            self._save_data(frames, actions, next_frames, dones)
+
+    @staticmethod
+    def _save_to_hf_dataset(data):
+        frames, actions, next_frames, dones = data
         dataset_dict = {
-            'frames': frames_buffer,
-            'actions': actions_buffer,
-            'next_frames': next_frames_buffer,
-            'dones': dones_buffer
+            'frames': frames,
+            'actions': actions,
+            'next_frames': next_frames,
+            'dones': dones
         }
         dataset = Dataset.from_dict(dataset_dict)
         dataset.push_to_hub('pacman_dataset', split='train', token=HF_TOKEN)
         print("Saved to Hugging Face dataset")
 
-    # Create a thread pool executor with multiple workers
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
-    for i_episode in range(episodes):
-        # Initialize the environment and state
-        state = env.reset(mode='rgb_array')
-        ep_reward = 0.
-        EPSILON = epsilon_by_frame(i_episode)
+class PacmanRunner:
+    def __init__(self, layout):
+        self.layout = layout
+        self.env = self._create_environment()
+        self.agent = None
 
-        for t in count():
-            # Render the current frame
-            current_frame = env.render(mode='rgb_array')
+    def _create_environment(self):
+        env = PacmanEnv(self.layout)
+        env = SkipFrame(env, skip=4)
+        env = GrayScaleObservation(env)
+        env = ResizeObservation(env, shape=84)
+        env = FrameStack(env, num_stack=4)
+        return env
 
-            # Select and perform an action
-            env.render(mode='human')
-            action = select_action(state, EPSILON, policy_net, n_actions)
-            next_state, reward, done, info = env.step(action)
-            reward = max(-1.0, min(reward, 1.0))
-            ep_reward += reward
-            
-            # Render the next frame
-            next_frame = env.render(mode='rgb_array')
+    def run(self):
+        screen = self.env.reset(mode='rgb_array')
+        n_actions = self.env.action_space.n
 
-            # Append data to buffers
-            frames_buffer.append(current_frame)
-            actions_buffer.append(action)
-            next_frames_buffer.append(next_frame)
-            dones_buffer.append(done)
+        self.agent = PacmanAgent.load_model(screen.shape, n_actions, 'pacman.pth')
 
-            memory.cache(state, next_state, action, reward, done)
+        for _ in range(10):
+            screen = self.env.reset(mode='rgb_array')
+            self.env.render(mode='human')
 
-            # Observe new state
-            if done:
-                next_state = None
+            for _ in count():
+                self.env.render(mode='human')
+                action = self.agent.select_action(screen, 0, n_actions)
+                screen, _, done, _ = self.env.step(action)
 
-            # Move to the next state
-            state = next_state
-
-            # Perform one step of the optimization (on the target network)
-            optimize_model(memory, policy_net, optimizer, target_net, GAMMA)
-            if done:
-                print("Episode #{}, lasts for {} timestep, total reward: {}".format(i_episode, t + 1, ep_reward))
-                break
-        # Update the target network, copying all weights and biases in DQN
-        if i_episode % TARGET_UPDATE == 0:
-            target_net.load_state_dict(policy_net.state_dict())
-
-        # Save data to Hugging Face dataset every 10 episodes
-        if i_episode % 2 == 0 and i_episode > 0:
-            # Put a copy of the current buffers into the queue
-            save_queue.put((frames_buffer.copy(), actions_buffer.copy(), next_frames_buffer.copy(), dones_buffer.copy()))
-            # Clear the original buffers
-            frames_buffer.clear()
-            actions_buffer.clear()
-            next_frames_buffer.clear()
-            dones_buffer.clear()
-            # Submit the save task to the executor
-            executor.submit(save_to_hf_dataset, save_queue.get())
-
-        if i_episode % 1000 == 0:
-            save_model(target_net, 'pacman.pth')
-
-    # Save any remaining data
-    if frames_buffer:
-        save_queue.put((frames_buffer.copy(), actions_buffer.copy(), next_frames_buffer.copy(), dones_buffer.copy()))
-        executor.submit(save_to_hf_dataset, save_queue.get())
-
-    # Shutdown the executor
-    executor.shutdown(wait=True)
-
-    print('Complete')
-    env.render()
-    env.close()
-
-    save_model(target_net, 'pacman.pth')
-
-
-def run_agent(layout: str):
-    env = PacmanEnv(layout)
-    env = SkipFrame(env, skip=4)
-    env = GrayScaleObservation(env)
-    env = ResizeObservation(env, shape=84)
-    env = FrameStack(env, num_stack=4)
-    screen = env.reset(mode='rgb_array')
-    n_actions = env.action_space.n
-
-    model = load_model(screen.shape, n_actions, 'pacman.pth')
-
-    for i in range(10):
-
-        env.render(mode='human')
-        screen = env.reset(mode='rgb_array')
-
-        for _ in count():
-            env.render(mode='human')
-            action = select_action(screen, 0, model, n_actions)
-            screen, reward, done, info = env.step(action)
-
-            if done:
-                break
-
+                if done:
+                    break
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Argument for the agent that interacts with the sm env')
@@ -360,7 +273,9 @@ if __name__ == '__main__':
 
     if args.train:
         frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 10
-        train_agent(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip)
+        trainer = PacmanTrainer(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip)
+        trainer.train()
 
     if args.run:
-        run_agent(layout)
+        runner = PacmanRunner(layout)
+        runner.run()
