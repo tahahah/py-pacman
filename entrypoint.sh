@@ -7,7 +7,7 @@ Xvfb :99 -screen 0 1024x768x24 &
 export DISPLAY=:99
 
 # Start a virtual sound device
-modprobe snd-dummy
+sudo modprobe snd-dummy
 
 # Configure ALSA to use the dummy sound card
 cat <<EOL > ~/.asoundrc
@@ -21,15 +21,9 @@ ctl.!default {
 }
 EOL
 
-# Install expect if not already installed
-if ! command -v unbuffer &> /dev/null
-then
-    apt-get update
-    apt-get install -y expect
-fi
 
-# Run your Python script with unbuffer to see logs in real time
-unbuffer python dqn_pytorch.py -lay classic -e 5 -t -frs 4
+# Run your Python script
+python dqn_pytorch.py -lay classic -e 5 -t -frs 4
 
 # Keep the container running
 tail -f /dev/null

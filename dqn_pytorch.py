@@ -13,10 +13,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
+from datasets import Dataset
 from dotenv import load_dotenv
 from gym.wrappers import FrameStack
 from PIL import Image
-from datasets import Dataset
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
@@ -115,6 +115,8 @@ class PacmanAgent:
         agent.target_net.load_state_dict(state_dict)
         return agent
 
+import logging
+
 
 class PacmanTrainer:
     def __init__(self, layout, episodes, frames_to_skip):
@@ -125,7 +127,9 @@ class PacmanTrainer:
         self.agent = None
         self.memory = None
         self.save_queue = queue.Queue()
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self.connection = None
+        self.channel = None
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     def _create_environment(self):
         env = PacmanEnv(layout=self.layout)
@@ -135,7 +139,30 @@ class PacmanTrainer:
         env = FrameStack(env, num_stack=4)
         return env
 
+    def _setup_rabbitmq(self):
+        import pika
+
+        # Set up the connection to RabbitMQ
+        credentials = pika.PlainCredentials('pacman', 'pacman_pass')
+        parameters = pika.ConnectionParameters(
+            'rabbitmq-host',
+            5672,
+            '/',
+            credentials
+        )
+        self.connection = pika.BlockingConnection(parameters)
+        self.channel = self.connection.channel()
+
+        # Declare the queue
+        self.channel.queue_declare(queue='HF_upload_queue')
+
+    def _close_rabbitmq(self):
+        if self.connection:
+            self.connection.close()
+
     def train(self):
+        self._setup_rabbitmq()
+
         screen = self.env.reset(mode='rgb_array')
         n_actions = self.env.action_space.n
 
@@ -148,6 +175,8 @@ class PacmanTrainer:
             state = self.env.reset(mode='rgb_array')
             ep_reward = 0.
             epsilon = self._get_epsilon(i_episode)
+            logging.info("-----------------------------------------------------")
+            logging.info(f"Starting episode {i_episode} with epsilon {epsilon}")
 
             for t in count():
                 current_frame = self.env.render(mode='rgb_array')
@@ -171,50 +200,52 @@ class PacmanTrainer:
 
                 self.agent.optimize_model(self.memory, gamma=0.99)
                 if done:
-                    print(f"Episode #{i_episode}, lasts for {t + 1} timestep, total reward: {ep_reward}")
+                    logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward}")
                     break
 
             if i_episode % 10 == 0:
                 self.agent.update_target_network()
+                logging.info(f"Updated target network at episode {i_episode}")
 
-            if i_episode % 2 == 0 and i_episode > 0:
+            if i_episode > 0:
                 self._save_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
                 frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                logging.info(f"Saved data at episode {i_episode}")
 
             if i_episode % 1000 == 0:
                 self.agent.save_model('pacman.pth')
+                logging.info(f"Saved model at episode {i_episode}")
 
         self._save_remaining_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-        self.executor.shutdown(wait=True)
 
-        print('Training Complete')
+        logging.info('Training Complete')
         self.env.close()
         self.agent.save_model('pacman.pth')
+        self._close_rabbitmq()
 
     def _get_epsilon(self, frame_idx):
         return 0.1 + (1.0 - 0.1) * math.exp(-1. * frame_idx / 1e7)
 
     def _save_data(self, frames, actions, next_frames, dones):
         self.save_queue.put((frames.copy(), actions.copy(), next_frames.copy(), dones.copy()))
-        self.executor.submit(self._save_to_hf_dataset, self.save_queue.get())
+        self._publish_to_rabbitmq(self.save_queue.get())
 
     def _save_remaining_data(self, frames, actions, next_frames, dones):
         if frames:
             self._save_data(frames, actions, next_frames, dones)
 
-    @staticmethod
-    def _save_to_hf_dataset(data):
-        frames, actions, next_frames, dones = data
-        dataset_dict = {
-            'frames': frames,
-            'actions': actions,
-            'next_frames': next_frames,
-            'dones': dones
-        }
-        dataset = Dataset.from_dict(dataset_dict)
-        dataset.push_to_hub('pacman_dataset', split='train', token=HF_TOKEN)
-        print("Saved to Hugging Face dataset")
+    def _publish_to_rabbitmq(self, data):
+        import pickle
 
+        # Serialize the data using pickle
+        message = pickle.dumps(data)
+
+        # Publish the message to the queue
+        self.channel.basic_publish(exchange='',
+                                   routing_key='HF_upload_queue',
+                                   body=message)
+
+        logging.info("Published dataset to RabbitMQ queue 'HF_upload_queue'")
 
 class PacmanRunner:
     def __init__(self, layout):

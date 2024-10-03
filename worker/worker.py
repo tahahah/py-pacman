@@ -1,0 +1,85 @@
+import logging
+import os
+import pickle
+
+import pika
+import psutil
+from datasets import Dataset
+from dotenv import load_dotenv
+from PIL import Image
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Get HF_TOKEN from environment variables
+HF_TOKEN = os.getenv('HF_TOKEN')
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Function to log memory usage
+def log_memory_usage():
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    logger.info(f"Memory usage: RSS={mem_info.rss / (1024 * 1024):.2f} MB, VMS={mem_info.vms / (1024 * 1024):.2f} MB")
+
+
+# Function to save buffered data to Hugging Face dataset in smaller batches
+def save_to_hf_dataset(data):
+    try:
+        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = data
+        
+        # Convert frames to PIL images
+        frames_buffer = [Image.fromarray(frame) for frame in frames_buffer]
+        next_frames_buffer = [Image.fromarray(frame) for frame in next_frames_buffer]
+        
+        batch_dict = {
+            'frame': frames_buffer,
+            'action': actions_buffer,
+            'next_frame': next_frames_buffer,
+            'done': dones_buffer
+        }
+        
+        # Create dataset with image column
+        dataset = Dataset.from_dict(batch_dict)
+        dataset = dataset.cast_column('frame', Image())
+        dataset = dataset.cast_column('next_frame', Image())
+        
+        dataset.push_to_hub('pacman_dataset_2', split='train', token=HF_TOKEN)
+        log_memory_usage()
+        logger.info("Saved to Hugging Face dataset")
+    except Exception as e:
+        logger.error("Failed to save to Hugging Face dataset", exc_info=True)
+
+
+def callback(ch, method, properties, body):
+    print(f"Received {body}")
+    try:
+        # Deserialize the message
+        data = pickle.loads(body)
+        # Call the save_to_hf_dataset function with the deserialized data
+        save_to_hf_dataset(data)
+    except Exception as e:
+        logger.error("Failed to process message", exc_info=True)
+
+def main():
+    credentials = pika.PlainCredentials('worker', 'worker_pass')
+    parameters = pika.ConnectionParameters(
+        'rabbitmq-host',
+        5672,
+        '/',
+        credentials
+    )
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+
+    channel.queue_declare(queue='HF_upload_queue')
+
+    channel.basic_consume(queue='HF_upload_queue', on_message_callback=callback, auto_ack=True)
+
+    print('Waiting for messages. To exit press CTRL+C')
+    channel.start_consuming()
+
+if __name__ == "__main__":
+    main()
