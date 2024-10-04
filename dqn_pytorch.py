@@ -1,5 +1,4 @@
 import argparse
-import concurrent.futures
 import math
 import os
 import queue
@@ -7,6 +6,7 @@ from collections import namedtuple
 from itertools import count
 
 import gym
+import huggingface_hub
 import numpy as np
 import torch
 import torch.nn as nn
@@ -36,7 +36,7 @@ Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'
 
 MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
-class DQN(nn.Module):
+class DQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()
         c, h, w = input_dim
@@ -106,7 +106,18 @@ class PacmanAgent:
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
     def save_model(self, filename):
+        # Save the model locally
         torch.save(self.policy_net.state_dict(), filename)
+        
+        # Save the model to Hugging Face
+        model_name = "pacman_policy_net_gamengen_1"
+        huggingface_hub.login(token=HF_TOKEN)
+
+        self.policy_net.push_to_hub(f"Tahahah/{model_name}")
+
+        # huggingface_hub.upload_file(filename, repo_id=model_name, repo_type="model")
+
+        logging.info(f"Model saved locally as {filename} and uploaded to Hugging Face as {model_name}")
 
     @classmethod
     def load_model(cls, input_dim, output_dim, filename):
@@ -185,7 +196,7 @@ class PacmanTrainer:
 
         frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
         batch_id = 0
-        max_batch_size = 500 * 1024 * 1024  # 500 MB
+        max_batch_size = 400 * 300 * 500  # 400 MB
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
@@ -350,7 +361,7 @@ if __name__ == '__main__':
     episodes = args.episodes[0] if args.episodes else 1000
 
     if args.train:
-        frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 10
+        frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 2
         trainer = PacmanTrainer(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip)
         trainer.train()
 
