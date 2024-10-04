@@ -34,6 +34,7 @@ device = torch.device("cuda" if USE_CUDA else "cpu")
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
+MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -116,7 +117,20 @@ class PacmanAgent:
         return agent
 
 import logging
+from typing import Any, List
 
+from pydantic import BaseModel, Field
+
+
+class DataRecord(BaseModel):
+    episode: int
+    frame: int
+    frames: List[Any]
+    actions: List[int]
+    next_frames: List[Any]
+    dones: List[bool]
+    batch_id: int
+    is_last_batch: bool
 
 class PacmanTrainer:
     def __init__(self, layout, episodes, frames_to_skip):
@@ -170,6 +184,8 @@ class PacmanTrainer:
         self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
 
         frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+        batch_id = 0
+        max_batch_size = 500 * 1024 * 1024  # 500 MB
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
@@ -203,42 +219,73 @@ class PacmanTrainer:
                     logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward}")
                     break
 
+                # Check if the batch size limit is reached
+                if self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer) >= max_batch_size:
+                    data_record = DataRecord(
+                        episode=i_episode,
+                        frame=len(frames_buffer),
+                        frames=frames_buffer.copy(),
+                        actions=actions_buffer.copy(),
+                        next_frames=next_frames_buffer.copy(),
+                        dones=dones_buffer.copy(),
+                        batch_id=batch_id,
+                        is_last_batch=False
+                    )
+                    self._save_data(data_record)
+                    frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                    batch_id += 1
+
+            # Send remaining data at the end of the episode
+            if frames_buffer:
+                data_record = DataRecord(
+                    episode=i_episode,
+                    frame=len(frames_buffer),
+                    frames=frames_buffer.copy(),
+                    actions=actions_buffer.copy(),
+                    next_frames=next_frames_buffer.copy(),
+                    dones=dones_buffer.copy(),
+                    batch_id=batch_id,
+                    is_last_batch=True
+                )
+                self._save_data(data_record)
+                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                batch_id = 0
+
             if i_episode % 10 == 0:
                 self.agent.update_target_network()
                 logging.info(f"Updated target network at episode {i_episode}")
 
-            if i_episode > 0:
-                self._save_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
-                logging.info(f"Saved data at episode {i_episode}")
-
             if i_episode % 1000 == 0:
                 self.agent.save_model('pacman.pth')
                 logging.info(f"Saved model at episode {i_episode}")
-
-        self._save_remaining_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
 
         logging.info('Training Complete')
         self.env.close()
         self.agent.save_model('pacman.pth')
         self._close_rabbitmq()
 
+    def _get_buffer_size(self, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
+        # Estimate the size of the buffers in bytes
+        return sum([frame.nbytes for frame in frames_buffer]) + \
+               sum([frame.nbytes for frame in next_frames_buffer]) + \
+               len(actions_buffer) * 4 + len(dones_buffer) * 1
+
     def _get_epsilon(self, frame_idx):
         return 0.1 + (1.0 - 0.1) * math.exp(-1. * frame_idx / 1e7)
 
-    def _save_data(self, frames, actions, next_frames, dones):
-        self.save_queue.put((frames.copy(), actions.copy(), next_frames.copy(), dones.copy()))
+    def _save_data(self, data_record: DataRecord):
+        self.save_queue.put(data_record)
         self._publish_to_rabbitmq(self.save_queue.get())
 
-    def _save_remaining_data(self, frames, actions, next_frames, dones):
-        if frames:
-            self._save_data(frames, actions, next_frames, dones)
+    def _save_remaining_data(self, data_record: DataRecord):
+        if data_record.frames:
+            self._save_data(data_record)
 
-    def _publish_to_rabbitmq(self, data):
+    def _publish_to_rabbitmq(self, data: DataRecord):
         import pickle
 
         # Serialize the data using pickle
-        message = pickle.dumps(data)
+        message = pickle.dumps(data.dict())
 
         # Publish the message to the queue
         self.channel.basic_publish(exchange='',

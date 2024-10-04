@@ -15,7 +15,7 @@ RABBITMQ_PASSWORD_WORKER=worker_pass
 echo 'NODENAME=rabbit@localhost' > /etc/rabbitmq/rabbitmq-env.conf
 
 # Set the maximum message size
-echo 'max_message_size = 104857600' >> /etc/rabbitmq/rabbitmq.conf
+echo 'max_message_size = 500000000' >> /etc/rabbitmq/rabbitmq.conf
 
 # Create Rabbitmq users
 (rabbitmqctl wait --timeout 60 $RABBITMQ_PID_FILE ; \
@@ -26,6 +26,10 @@ echo "*** User '$RABBITMQ_USER_PACMAN' with password '$RABBITMQ_PASSWORD_PACMAN'
 rabbitmqctl add_user $RABBITMQ_USER_WORKER $RABBITMQ_PASSWORD_WORKER 2>/dev/null ; \
 rabbitmqctl set_user_tags $RABBITMQ_USER_WORKER administrator ; \
 rabbitmqctl set_permissions -p / $RABBITMQ_USER_WORKER  ".*" ".*" ".*" ; \
+
+# Enable RabbitMQ management plugin
+rabbitmq-plugins enable rabbitmq_management
+
 echo "*** User '$RABBITMQ_USER_WORKER' with password '$RABBITMQ_PASSWORD_WORKER' completed. ***" ; \
 echo "*** Log in the WebUI at port 15672 (example: http:/localhost:15672) ***") &
 
