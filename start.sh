@@ -29,7 +29,7 @@ then
 fi
 
 # Run your Python script with unbuffer to see logs in real time
-unbuffer python dqn_pytorch.py -lay classic -e 5 -t -frs 4
+unbuffer python dqn_pytorch.py -lay classic -e 10000 -t -frs 1
 
 # Keep the container running
 tail -f /dev/null

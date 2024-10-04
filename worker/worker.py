@@ -53,7 +53,7 @@ def save_to_hf_dataset(data):
         dataset = dataset.cast_column('frame_image', Image())
         dataset = dataset.cast_column('next_frame_image', Image())
         
-        dataset.push_to_hub('pacman_dataset_3', split='train', token=HF_TOKEN)
+        dataset.push_to_hub('pacman_dataset_gamengen_1', split='train', token=HF_TOKEN)
         log_memory_usage()
         logger.info("Saved to Hugging Face dataset")
     except Exception as e:
