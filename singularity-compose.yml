@@ -1,0 +1,66 @@
+version: '1.0'
+
+instances:
+  pacman:
+    build:
+      context: .
+      recipe: Singularity.def
+    command: bash
+    develop:
+      watch:
+        - action: sync
+          path: ./
+          target: /app
+          ignore:
+            - pacman-env
+        # - action: rebuild
+        #   path: '**/*.py'
+    networks:
+      - app_network
+    volumes:
+      - pacman_volume:/data
+    depends_on:
+      - rabbitmqserver
+    resources:
+      limits:
+        memory: 12g
+      reservations:
+        devices:
+          - capabilities: [gpu]
+
+  rabbitmqserver:
+    build:
+      context: .
+      recipe: Singularity.rabbitMQ
+    hostname: "rabbitmq-host"
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: "admin"
+      RABBITMQ_DEFAULT_PASS: "pass"
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmqctl status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  worker:
+    build:
+      context: ./worker
+      recipe: Singularity.worker
+    depends_on:
+      - rabbitmqserver
+    networks:
+      - app_network
+    resources:
+      limits:
+        memory: 10g
+
+networks:
+  app_network:
+
+volumes:
+  pacman_volume:
