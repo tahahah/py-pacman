@@ -275,9 +275,11 @@ class PacmanTrainer:
 
     def _get_buffer_size(self, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
         # Estimate the size of the buffers in bytes
-        return sum([frame.nbytes for frame in frames_buffer]) + \
+        buffer_size = sum([frame.nbytes for frame in frames_buffer]) + \
                sum([frame.nbytes for frame in next_frames_buffer]) + \
                len(actions_buffer) * 4 + len(dones_buffer) * 1
+        logging.info(f"Buffer size: {buffer_size} bytes")
+        return buffer_size
 
     def _get_epsilon(self, frame_idx):
         return 0.1 + (1.0 - 0.1) * math.exp(-1. * frame_idx / 1e7)
