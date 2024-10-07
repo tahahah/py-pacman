@@ -3,7 +3,6 @@ import os
 import pickle
 
 import pika
-import psutil
 from datasets import Dataset
 from dotenv import load_dotenv
 from PIL import Image
@@ -17,12 +16,6 @@ HF_TOKEN = os.getenv('HF_TOKEN')
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Function to log memory usage
-def log_memory_usage():
-    process = psutil.Process(os.getpid())
-    mem_info = process.memory_info()
-    logger.info(f"Memory usage: RSS={mem_info.rss / (1024 * 1024):.2f} MB, VMS={mem_info.vms / (1024 * 1024):.2f} MB")
 
 # Function to save buffered data to Hugging Face dataset in smaller batches
 def save_to_hf_dataset(data):
@@ -54,7 +47,6 @@ def save_to_hf_dataset(data):
         dataset = dataset.cast_column('next_frame_image', Image())
         
         dataset.push_to_hub('pacman_dataset_gamengen_1', split='train', token=HF_TOKEN)
-        log_memory_usage()
         logger.info("Saved to Hugging Face dataset")
     except Exception as e:
         logger.error("Failed to save to Hugging Face dataset", exc_info=True)
@@ -98,6 +90,8 @@ def callback(ch, method, properties, body):
 
             # Save combined data to Hugging Face dataset
             save_to_hf_dataset(combined_data)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
 
             # Clear stored data for the episode
             del batch_data[episode]
@@ -119,6 +113,7 @@ def main():
     channel = connection.channel()
 
     channel.queue_declare(queue='HF_upload_queue')
+    channel.basic_qos(prefetch_count=1)
 
     channel.basic_consume(queue='HF_upload_queue', on_message_callback=callback, auto_ack=True)
 
