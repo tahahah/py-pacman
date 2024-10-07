@@ -113,7 +113,7 @@ class PacmanAgent:
         model_name = "pacman_policy_net_gamengen_1"
         huggingface_hub.login(token=HF_TOKEN)
 
-        huggingface_hub.upload_file(filename, repo_id=f"Tahahah/{model_name}", repo_type="model")
+        huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=f"Tahahah/{model_name}", repo_type="model")
 
         logging.info(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {model_name}")
 

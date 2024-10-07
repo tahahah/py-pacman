@@ -56,10 +56,6 @@ services:
         condition: service_healthy
     networks:
       - app_network
-    deploy:
-      resources:
-        limits:
-          memory: 10g
 
 networks:
   app_network:
