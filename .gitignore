@@ -19,5 +19,6 @@ neat-checkpoint-*
 
 pacman-env
 pacman_data.hdf5
+pacman-env-lin
 
 .env
