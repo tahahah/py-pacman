@@ -56,6 +56,10 @@ services:
         condition: service_healthy
     networks:
       - app_network
+    deploy:
+      resources:
+        limits:
+          memory: 4g  # Increase this value as needed
 
 networks:
   app_network:
