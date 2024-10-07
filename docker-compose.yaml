@@ -59,7 +59,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4g  # Increase this value as needed
+          memory: 8g  # Increase this value as needed
+        reservations:
+          memory: 4g  # Ensure some memory is reserved
 
 networks:
   app_network:
