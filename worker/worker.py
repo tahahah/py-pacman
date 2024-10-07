@@ -98,8 +98,6 @@ def callback(ch, method, properties, body):
 
     except Exception as e:
         logger.error("Failed to process message", exc_info=True)
-    finally:
-        log_memory_usage()  # Log memory usage after processing each message
 
 def main():
     credentials = pika.PlainCredentials('worker', 'worker_pass')
