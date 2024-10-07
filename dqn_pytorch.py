@@ -229,7 +229,9 @@ class PacmanTrainer:
                     break
 
                 # Check if the batch size limit is reached
-                if self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer) >= max_batch_size:
+                buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+                if buffer_size >= max_batch_size:
+                    logging.info(f"Buffer size: {buffer_size} bytes")
                     data_record = DataRecord(
                         episode=i_episode,
                         frame=len(frames_buffer),
@@ -278,7 +280,6 @@ class PacmanTrainer:
         buffer_size = sum([frame.nbytes for frame in frames_buffer]) + \
                sum([frame.nbytes for frame in next_frames_buffer]) + \
                len(actions_buffer) * 4 + len(dones_buffer) * 1
-        logging.info(f"Buffer size: {buffer_size} bytes")
         return buffer_size
 
     def _get_epsilon(self, frame_idx):
