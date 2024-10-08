@@ -1,9 +1,34 @@
 #!/bin/bash
 
-# Shut down Xvfb if it's up
+
+# Check if Xvfb is running and shut it down if it is
 if pgrep Xvfb > /dev/null; then
+    echo "Xvfb is already running. Shutting it down..."
     pkill Xvfb
+    echo "Xvfb has been shut down."
+    if [ -f /tmp/.X99-lock ]; then
+        echo "Removing /tmp/.X99-lock..."
+        rm /tmp/.X99-lock
+        echo "/tmp/.X99-lock has been removed."
+    fi
+    # Wait until Xvfb process is completely terminated
+    while pgrep Xvfb > /dev/null; do
+        echo "Waiting for Xvfb to terminate..."
+        sleep 1
+    done
+else
+    echo "Xvfb is not running."
 fi
+
+# Ensure the lock file is removed before starting a new Xvfb instance
+if [ -f /tmp/.X99-lock ]; then
+    echo "Removing /tmp/.X99-lock..."
+    rm /tmp/.X99-lock
+    echo "/tmp/.X99-lock has been removed."
+fi
+
+# Start Xvfb
+Xvfb :99 -screen 0 1024x768x24 &
 
 # Start Xvfb
 Xvfb :99 -screen 0 1024x768x24 &

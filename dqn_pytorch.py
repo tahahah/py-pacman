@@ -134,7 +134,6 @@ from pydantic import BaseModel, Field
 
 class DataRecord(BaseModel):
     episode: int
-    frame: int
     frames: List[Any]
     actions: List[int]
     next_frames: List[Any]
@@ -244,7 +243,6 @@ class PacmanTrainer:
                         logging.info(f"Buffer size: {buffer_size} bytes")
                         data_record = DataRecord(
                             episode=i_episode,
-                            frame=len(frames_buffer),
                             frames=frames_buffer.copy(),
                             actions=actions_buffer.copy(),
                             next_frames=next_frames_buffer.copy(),
@@ -260,7 +258,6 @@ class PacmanTrainer:
             if frames_buffer:
                 data_record = DataRecord(
                     episode=i_episode,
-                    frame=len(frames_buffer),
                     frames=frames_buffer.copy(),
                     actions=actions_buffer.copy(),
                     next_frames=next_frames_buffer.copy(),
