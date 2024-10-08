@@ -1,4 +1,4 @@
-from typing import Union, Tuple, Any, Dict
+from typing import Any, Dict, Tuple, Union
 
 import gym
 import numpy as np
@@ -64,9 +64,9 @@ class PacmanEnv(gym.Env):
 
         self.seed()
 
-    def __del__(self):
-        if self.enable_render:
-            pg.quit()
+    # def __del__(self):
+    #     if self.enable_render:
+    #         pg.quit()
 
     def seed(self, seed=None):
         """

@@ -1,6 +1,10 @@
-services:
+version: '1.0'
+
+instances:
   pacman:
-    build: .
+    build:
+      context: .
+      recipe: Singularity.def
     command: bash
     develop:
       watch:
@@ -16,21 +20,18 @@ services:
     volumes:
       - pacman_volume:/data
     depends_on:
-      rabbitmqserver:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 16g  # Increase this value
-        reservations:
-          devices:
-            - capabilities: [gpu]
-        
+      - rabbitmqserver
+    resources:
+      limits:
+        memory: 12g
+      reservations:
+        devices:
+          - capabilities: [gpu]
+
   rabbitmqserver:
-    container_name: rabbitmqServer
     build:
       context: .
-      dockerfile: ./rabbitMQ.Dockerfile
+      recipe: Singularity.rabbitMQ
     hostname: "rabbitmq-host"
     ports:
       - "5672:5672"
@@ -49,21 +50,14 @@ services:
   worker:
     build:
       context: ./worker
-      dockerfile: Dockerfile
-    container_name: worker
+      recipe: Singularity.worker
     depends_on:
-      rabbitmqserver:
-        condition: service_healthy
+      - rabbitmqserver
     networks:
       - app_network
-    deploy:
-      resources:
-        limits:
-          memory: 32g  # Increase this value
-        reservations:
-          memory: 16g  # Ensure some memory is reserved
-    mem_limit: 32g  # Set memory limit
-    memswap_limit: 64g  # Set swap memory limit
+    resources:
+      limits:
+        memory: 10g
 
 networks:
   app_network:

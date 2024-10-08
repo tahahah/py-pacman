@@ -1,5 +1,5 @@
+
 import argparse
-import concurrent.futures
 import math
 import os
 import queue
@@ -7,16 +7,17 @@ from collections import namedtuple
 from itertools import count
 
 import gym
+import huggingface_hub
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
+from datasets import Dataset
 from dotenv import load_dotenv
 from gym.wrappers import FrameStack
 from PIL import Image
-from datasets import Dataset
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
@@ -34,8 +35,9 @@ device = torch.device("cuda" if USE_CUDA else "cpu")
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
+MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
-class DQN(nn.Module):
+class DQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()
         c, h, w = input_dim
@@ -105,7 +107,16 @@ class PacmanAgent:
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
     def save_model(self, filename):
+        # Save the model locally
         torch.save(self.policy_net.state_dict(), filename)
+        
+        # Save the model to Hugging Face
+        model_name = "pacman_policy_net_gamengen_1"
+        huggingface_hub.login(token=HF_TOKEN)
+
+        huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=f"Tahahah/{model_name}", repo_type="model")
+
+        logging.info(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {model_name}")
 
     @classmethod
     def load_model(cls, input_dim, output_dim, filename):
@@ -115,9 +126,23 @@ class PacmanAgent:
         agent.target_net.load_state_dict(state_dict)
         return agent
 
+import logging
+from typing import Any, List
+
+from pydantic import BaseModel, Field
+
+
+class DataRecord(BaseModel):
+    episode: int
+    frames: List[Any]
+    actions: List[int]
+    next_frames: List[Any]
+    dones: List[bool]
+    batch_id: int
+    is_last_batch: bool
 
 class PacmanTrainer:
-    def __init__(self, layout, episodes, frames_to_skip):
+    def __init__(self, layout, episodes, frames_to_skip, save_locally, enable_rmq):
         self.layout = layout
         self.episodes = episodes
         self.frames_to_skip = frames_to_skip
@@ -125,7 +150,11 @@ class PacmanTrainer:
         self.agent = None
         self.memory = None
         self.save_queue = queue.Queue()
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self.connection = None
+        self.channel = None
+        self.save_locally = save_locally | False
+        self.enable_rmq = enable_rmq
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     def _create_environment(self):
         env = PacmanEnv(layout=self.layout)
@@ -135,7 +164,34 @@ class PacmanTrainer:
         env = FrameStack(env, num_stack=4)
         return env
 
+    def _setup_rabbitmq(self):
+        if not self.enable_rmq:
+            return
+
+        import pika
+
+        # Set up the connection to RabbitMQ
+        credentials = pika.PlainCredentials('pacman', 'pacman_pass')
+        parameters = pika.ConnectionParameters(
+            'rabbitmq-host',
+            5672,
+            '/',
+            credentials
+        )
+        self.connection = pika.BlockingConnection(parameters)
+        self.channel = self.connection.channel()
+
+        # Declare the queue
+        self.channel.queue_declare(queue='HF_upload_queue')
+
+    def _close_rabbitmq(self):
+        if self.connection:
+            self.connection.close()
+
     def train(self):
+        if self.enable_rmq:
+            self._setup_rabbitmq()
+
         screen = self.env.reset(mode='rgb_array')
         n_actions = self.env.action_space.n
 
@@ -143,11 +199,15 @@ class PacmanTrainer:
         self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
 
         frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+        batch_id = 0
+        max_batch_size = 400 * 1024 * 1024  # 400 MB
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
             ep_reward = 0.
             epsilon = self._get_epsilon(i_episode)
+            logging.info("-----------------------------------------------------")
+            logging.info(f"Starting episode {i_episode} with epsilon {epsilon}")
 
             for t in count():
                 current_frame = self.env.render(mode='rgb_array')
@@ -171,50 +231,102 @@ class PacmanTrainer:
 
                 self.agent.optimize_model(self.memory, gamma=0.99)
                 if done:
-                    print(f"Episode #{i_episode}, lasts for {t + 1} timestep, total reward: {ep_reward}")
+                    if self.save_locally:
+                        self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
+                    logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward}")
                     break
+
+                # Check if the batch size limit is reached
+                if self.enable_rmq:
+                    buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+                    if buffer_size >= max_batch_size:
+                        logging.info(f"Buffer size: {buffer_size} bytes")
+                        data_record = DataRecord(
+                            episode=i_episode,
+                            frames=frames_buffer.copy(),
+                            actions=actions_buffer.copy(),
+                            next_frames=next_frames_buffer.copy(),
+                            dones=dones_buffer.copy(),
+                            batch_id=batch_id,
+                            is_last_batch=False
+                        )
+                        self._save_data(data_record)
+                        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                        batch_id += 1
+
+            # Send remaining data at the end of the episode
+            if frames_buffer:
+                data_record = DataRecord(
+                    episode=i_episode,
+                    frames=frames_buffer.copy(),
+                    actions=actions_buffer.copy(),
+                    next_frames=next_frames_buffer.copy(),
+                    dones=dones_buffer.copy(),
+                    batch_id=batch_id,
+                    is_last_batch=True
+                )
+                self._save_data(data_record)
+                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                batch_id = 0
 
             if i_episode % 10 == 0:
                 self.agent.update_target_network()
-
-            if i_episode % 2 == 0 and i_episode > 0:
-                self._save_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                logging.info(f"Updated target network at episode {i_episode}")
 
             if i_episode % 1000 == 0:
                 self.agent.save_model('pacman.pth')
+                logging.info(f"Saved model at episode {i_episode}")
 
-        self._save_remaining_data(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-        self.executor.shutdown(wait=True)
-
-        print('Training Complete')
+        logging.info('Training Complete')
         self.env.close()
         self.agent.save_model('pacman.pth')
+        if self.enable_rmq:
+            self._close_rabbitmq()
+
+    def _get_buffer_size(self, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
+        # Estimate the size of the buffers in bytes
+        buffer_size = sum([frame.nbytes for frame in frames_buffer]) + \
+               sum([frame.nbytes for frame in next_frames_buffer]) + \
+               len(actions_buffer) * 4 + len(dones_buffer) * 1
+        return buffer_size
 
     def _get_epsilon(self, frame_idx):
         return 0.1 + (1.0 - 0.1) * math.exp(-1. * frame_idx / 1e7)
 
-    def _save_data(self, frames, actions, next_frames, dones):
-        self.save_queue.put((frames.copy(), actions.copy(), next_frames.copy(), dones.copy()))
-        self.executor.submit(self._save_to_hf_dataset, self.save_queue.get())
+    def _save_data(self, data_record: DataRecord):
+        self.save_queue.put(data_record)
+        if self.enable_rmq:
+            self._publish_to_rabbitmq(self.save_queue.get())
 
-    def _save_remaining_data(self, frames, actions, next_frames, dones):
-        if frames:
-            self._save_data(frames, actions, next_frames, dones)
+    def _save_remaining_data(self, data_record: DataRecord):
+        if data_record.frames:
+            self._save_data(data_record)
 
-    @staticmethod
-    def _save_to_hf_dataset(data):
-        frames, actions, next_frames, dones = data
-        dataset_dict = {
-            'frames': frames,
-            'actions': actions,
-            'next_frames': next_frames,
-            'dones': dones
-        }
-        dataset = Dataset.from_dict(dataset_dict)
-        dataset.push_to_hub('pacman_dataset', split='train', token=HF_TOKEN)
-        print("Saved to Hugging Face dataset")
+    def _publish_to_rabbitmq(self, data: DataRecord):
+        import pickle
 
+        # Serialize the data using pickle
+        message = pickle.dumps(data.dict())
+
+        # Publish the message to the queue
+        self.channel.basic_publish(exchange='',
+                                   routing_key='HF_upload_queue',
+                                   body=message)
+
+        logging.info("Published dataset to RabbitMQ queue 'HF_upload_queue'")
+
+    def _save_frames_locally(self, frames, episode, actions):
+        # Create a directory for the episode if it doesn't exist
+        episode_dir = f"episode_{episode}_frs{self.frames_to_skip}"
+        if not os.path.exists(episode_dir):
+            os.makedirs(episode_dir)
+
+        # Save each frame as a PNG file with the episode and action in the filename
+        for idx, frame in enumerate(frames):
+            action = actions[idx]
+            filename = os.path.join(episode_dir, f"{idx:05d}.png")
+            Image.fromarray(frame).save(filename)
+            # logging.info(f"Saved frame {idx} of episode {episode} with action {action} to {filename}")
 
 class PacmanRunner:
     def __init__(self, layout):
@@ -261,6 +373,10 @@ def parse_args():
                              "an action a every frame")
     parser.add_argument('-r', '--run', action='store_true',
                         help='run the trained agent')
+    parser.add_argument('-loc', '--save_locally', action='store_true',
+                        help='Save the frames')
+    parser.add_argument('-rmq', '--enable_rmq', action='store_true',
+                        help='Enable RabbitMQ for saving data')
 
     args = parser.parse_args()
     return args
@@ -272,8 +388,8 @@ if __name__ == '__main__':
     episodes = args.episodes[0] if args.episodes else 1000
 
     if args.train:
-        frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 10
-        trainer = PacmanTrainer(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip)
+        frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 4
+        trainer = PacmanTrainer(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip, save_locally=args.save_locally, enable_rmq=args.enable_rmq)
         trainer.train()
 
     if args.run:
