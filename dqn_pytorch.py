@@ -1,3 +1,4 @@
+
 import argparse
 import math
 import os
@@ -142,7 +143,7 @@ class DataRecord(BaseModel):
     is_last_batch: bool
 
 class PacmanTrainer:
-    def __init__(self, layout, episodes, frames_to_skip):
+    def __init__(self, layout, episodes, frames_to_skip, save_locally, enable_rmq):
         self.layout = layout
         self.episodes = episodes
         self.frames_to_skip = frames_to_skip
@@ -152,6 +153,8 @@ class PacmanTrainer:
         self.save_queue = queue.Queue()
         self.connection = None
         self.channel = None
+        self.save_locally = save_locally | False
+        self.enable_rmq = enable_rmq
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     def _create_environment(self):
@@ -163,6 +166,9 @@ class PacmanTrainer:
         return env
 
     def _setup_rabbitmq(self):
+        if not self.enable_rmq:
+            return
+
         import pika
 
         # Set up the connection to RabbitMQ
@@ -184,7 +190,8 @@ class PacmanTrainer:
             self.connection.close()
 
     def train(self):
-        self._setup_rabbitmq()
+        if self.enable_rmq:
+            self._setup_rabbitmq()
 
         screen = self.env.reset(mode='rgb_array')
         n_actions = self.env.action_space.n
@@ -194,7 +201,7 @@ class PacmanTrainer:
 
         frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
         batch_id = 0
-        max_batch_size = 400000000  # 400 MB
+        max_batch_size = 400 * 1024 * 1024  # 400 MB
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
@@ -225,26 +232,29 @@ class PacmanTrainer:
 
                 self.agent.optimize_model(self.memory, gamma=0.99)
                 if done:
+                    if self.save_locally:
+                        self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
                     logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward}")
                     break
 
                 # Check if the batch size limit is reached
-                buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-                if buffer_size >= max_batch_size:
-                    logging.info(f"Buffer size: {buffer_size} bytes")
-                    data_record = DataRecord(
-                        episode=i_episode,
-                        frame=len(frames_buffer),
-                        frames=frames_buffer.copy(),
-                        actions=actions_buffer.copy(),
-                        next_frames=next_frames_buffer.copy(),
-                        dones=dones_buffer.copy(),
-                        batch_id=batch_id,
-                        is_last_batch=False
-                    )
-                    self._save_data(data_record)
-                    frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
-                    batch_id += 1
+                if self.enable_rmq:
+                    buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+                    if buffer_size >= max_batch_size:
+                        logging.info(f"Buffer size: {buffer_size} bytes")
+                        data_record = DataRecord(
+                            episode=i_episode,
+                            frame=len(frames_buffer),
+                            frames=frames_buffer.copy(),
+                            actions=actions_buffer.copy(),
+                            next_frames=next_frames_buffer.copy(),
+                            dones=dones_buffer.copy(),
+                            batch_id=batch_id,
+                            is_last_batch=False
+                        )
+                        self._save_data(data_record)
+                        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                        batch_id += 1
 
             # Send remaining data at the end of the episode
             if frames_buffer:
@@ -273,7 +283,8 @@ class PacmanTrainer:
         logging.info('Training Complete')
         self.env.close()
         self.agent.save_model('pacman.pth')
-        self._close_rabbitmq()
+        if self.enable_rmq:
+            self._close_rabbitmq()
 
     def _get_buffer_size(self, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
         # Estimate the size of the buffers in bytes
@@ -287,7 +298,8 @@ class PacmanTrainer:
 
     def _save_data(self, data_record: DataRecord):
         self.save_queue.put(data_record)
-        self._publish_to_rabbitmq(self.save_queue.get())
+        if self.enable_rmq:
+            self._publish_to_rabbitmq(self.save_queue.get())
 
     def _save_remaining_data(self, data_record: DataRecord):
         if data_record.frames:
@@ -305,6 +317,19 @@ class PacmanTrainer:
                                    body=message)
 
         logging.info("Published dataset to RabbitMQ queue 'HF_upload_queue'")
+
+    def _save_frames_locally(self, frames, episode, actions):
+        # Create a directory for the episode if it doesn't exist
+        episode_dir = f"episode_{episode}_frs{self.frames_to_skip}"
+        if not os.path.exists(episode_dir):
+            os.makedirs(episode_dir)
+
+        # Save each frame as a PNG file with the episode and action in the filename
+        for idx, frame in enumerate(frames):
+            action = actions[idx]
+            filename = os.path.join(episode_dir, f"{idx:05d}.png")
+            Image.fromarray(frame).save(filename)
+            # logging.info(f"Saved frame {idx} of episode {episode} with action {action} to {filename}")
 
 class PacmanRunner:
     def __init__(self, layout):
@@ -351,6 +376,10 @@ def parse_args():
                              "an action a every frame")
     parser.add_argument('-r', '--run', action='store_true',
                         help='run the trained agent')
+    parser.add_argument('-loc', '--save_locally', action='store_true',
+                        help='Save the frames')
+    parser.add_argument('-rmq', '--enable_rmq', action='store_true',
+                        help='Enable RabbitMQ for saving data')
 
     args = parser.parse_args()
     return args
@@ -362,8 +391,8 @@ if __name__ == '__main__':
     episodes = args.episodes[0] if args.episodes else 1000
 
     if args.train:
-        frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 2
-        trainer = PacmanTrainer(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip)
+        frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 4
+        trainer = PacmanTrainer(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip, save_locally=args.save_locally, enable_rmq=args.enable_rmq)
         trainer.train()
 
     if args.run:

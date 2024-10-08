@@ -21,7 +21,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 12g
+          memory: 16g  # Increase this value
         reservations:
           devices:
             - capabilities: [gpu]
@@ -59,9 +59,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8g  # Increase this value as needed
+          memory: 32g  # Increase this value
         reservations:
-          memory: 4g  # Ensure some memory is reserved
+          memory: 16g  # Ensure some memory is reserved
+    mem_limit: 32g  # Set memory limit
+    memswap_limit: 64g  # Set swap memory limit
 
 networks:
   app_network:

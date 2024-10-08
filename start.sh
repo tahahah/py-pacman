@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Shut down Xvfb if it's up
+if pgrep Xvfb > /dev/null; then
+    pkill Xvfb
+fi
+
 # Start Xvfb
 Xvfb :99 -screen 0 1024x768x24 &
 
@@ -26,10 +31,11 @@ if ! command -v unbuffer &> /dev/null
 then
     apt-get update
     apt-get install -y expect
+    ln -s /usr/bin/unbuffer /usr/local/bin/unbuffer  # Ensure unbuffer is in PATH
 fi
 
 # Run your Python script with unbuffer to see logs in real time
-unbuffer python dqn_pytorch.py -lay classic -e 10000 -t -frs 1
+unbuffer python dqn_pytorch.py -lay classic -e 10000 -t -frs 1 -rmq
 
 # Keep the container running
 tail -f /dev/null
