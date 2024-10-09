@@ -64,7 +64,7 @@ def save_to_hf_dataset(data):
         dataset = Dataset.from_dict(batch_dict)
         
         
-        dataset.push_to_hub('pacman_dataset_gamengen_1', split='train', token=HF_TOKEN, config_name=f"episode_{episode}")
+        dataset.push_to_hub('PacmanDataset', split='train', token=HF_TOKEN, config_name=f"episode_{episode}")
         logger.info("\tSaved to Hugging Face dataset")
 
         # Free up memory
