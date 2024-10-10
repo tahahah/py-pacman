@@ -67,6 +67,18 @@ class PacmanAgent:
         self.optimizer = optim.RMSprop(self.policy_net.parameters())
         self.steps_done = 0
 
+        # Try to load the model from Hugging Face if it exists
+        model_name = "pacman_policy_net_gamengen_1"
+        try:
+            huggingface_hub.login(token=HF_TOKEN)
+            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{model_name}", filename="checkpoints/pacman.pth", repo_type="model")
+            state_dict = torch.load(model_path, map_location=device)
+            self.policy_net.load_state_dict(state_dict)
+            self.target_net.load_state_dict(state_dict)
+            logging.info(f"Model loaded from Hugging Face: {model_name}")
+        except Exception as e:
+            logging.warning(f"Could not load model from Hugging Face: {e}")
+
     def select_action(self, state, epsilon, n_actions):
         if np.random.rand() < epsilon:
             return np.random.randint(n_actions)

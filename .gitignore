@@ -21,6 +21,8 @@ pacman-env
 pacman_data.hdf5
 pacman-env-lin
 
+pacman-env-lin
+
 .env
 episode**
 **.mp4
