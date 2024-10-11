@@ -90,30 +90,32 @@ class PacmanAgent:
     def optimize_model(self, memory, gamma):
         if self.steps_done < 1e3:
             return
-
-        state, next_state, action, reward, done = memory.sample()
+        state, next_state, action, reward,
+        done = memory.sample()
         
         state = state.to(device)
         next_state = next_state.to(device)
         action = action.to(device)
         reward = reward.to(device)
         done = done.to(device)
-
         state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
-
         next_state_values = torch.zeros(memory.batch_size, device=device)
+        
         with torch.no_grad():
-            next_state_values[~done] = self.target_net(next_state).max(1)[0].detach()
-
+            # Detaching the tensor from the computation graph
+            next_state_values[~done] = self.target_net(next_state).max(1)[0].detach() 
+        
         expected_state_action_values = (next_state_values * gamma) + reward
-
         loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
-
         self.optimizer.zero_grad()
         loss.backward()
+
         for param in self.policy_net.parameters():
             param.grad.data.clamp_(-1, 1)
+
         self.optimizer.step()
+        # Deleting tensors after optimization
+        del state, next_state, action, reward, done 
 
     def update_target_network(self):
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -284,6 +286,10 @@ class PacmanTrainer:
             if i_episode % 10 == 0:
                 self.agent.update_target_network()
                 logging.info(f"Updated target network at episode {i_episode}")
+                torch.cuda.empty_cache()
+                logging.info(torch.cuda.memory_summary())
+                torch.autograd.set_detect_anomaly(True)
+
 
             if i_episode % 1000 == 0:
                 self.agent.save_model('pacman.pth')
