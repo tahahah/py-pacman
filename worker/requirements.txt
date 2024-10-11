@@ -3,3 +3,4 @@ python-dotenv==1.0.1
 psutil
 pillow
 datasets
+redis
