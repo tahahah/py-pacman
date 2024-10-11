@@ -13,11 +13,11 @@ WORKDIR /app
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
 
-# Copy the rest of your application code into the container
-COPY --chown=app:app . .
-
 # Install the dependencies from requirements.txt and error if pip errors
 RUN pip install -r requirements.txt
+
+# Copy the rest of your application code into the container
+COPY --chown=app:app . .
 
 # Ensure the directory exists and has the correct permissions
 RUN mkdir -p /var/lib/apt/lists/partial && chmod -R 755 /var/lib/apt/lists
