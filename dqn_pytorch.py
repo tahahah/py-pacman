@@ -250,7 +250,7 @@ class PacmanTrainer:
         logging.info(f"Current episode keys buffer size: {len(self.episode_keys_buffer)}")
 
         # Publish keys to the queue every 20 episodes
-        if len(self.episode_keys_buffer) >= 3:
+        if len(self.episode_keys_buffer) >= 20:
             logging.info("Buffer size reached 20, publishing keys to queue")
             self._publish_keys_to_queue()
             self.episode_keys_buffer.clear()
@@ -274,8 +274,7 @@ class PacmanTrainer:
         self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
 
         frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
-        batch_id = 0
-        max_batch_size = 400 * 1024 * 1024  # 400 MB
+        max_batch_size = 500 * 1024 * 1024  # 400 MB
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
@@ -314,35 +313,17 @@ class PacmanTrainer:
                 # Check if the batch size limit is reached
             if self.enable_rmq:
                 buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-                # if buffer_size >= max_batch_size:
                 logging.info(f"Buffer size: {buffer_size} bytes")
-                # data_record = DataRecord(
-                #     episode=i_episode,
-                #     frames=frames_buffer.copy(),
-                #     actions=actions_buffer.copy(),
-                #     next_frames=next_frames_buffer.copy(),
-                #     dones=dones_buffer.copy(),
-                #     batch_id=batch_id,
-                #     is_last_batch=False
-                # )
+                if buffer_size >= max_batch_size:
+                    logging.warning("BUFFER SIZE EXCEEDING 500MB")
                 self._save_data_to_redis(i_episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
                 frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
                 # batch_id += 1
 
             # Send remaining data at the end of the episode
             if frames_buffer and self.enable_rmq:
-                # data_record = DataRecord(
-                #     episode=i_episode,
-                #     frames=frames_buffer.copy(),
-                #     actions=actions_buffer.copy(),
-                #     next_frames=next_frames_buffer.copy(),
-                #     dones=dones_buffer.copy(),
-                #     batch_id=batch_id,
-                #     is_last_batch=True
-                # )
                 self._save_data_to_redis(i_episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
                 frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
-                batch_id = 0
 
             if i_episode > 2: 
                 if i_episode % 10 == 0:
