@@ -11,6 +11,10 @@ import wandb
 from datasets import Dataset
 from dotenv import load_dotenv
 from PIL import Image
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import (ConnectionError, ConnectionResetError,
+                              TimeoutError)
+from redis.retry import Retry
 
 # Load environment variables from .env file
 load_dotenv()
@@ -100,9 +104,17 @@ def save_to_hf_dataset(episodes_data):
 batch_data = {}
 
 # Redis client
-redis_client = redis.StrictRedis(host='redis', port=6379, db=0, decode_responses=False, password="pacman", health_check_interval=30, socket_keepalive=True)
-
-
+redis_client = redis.StrictRedis(
+            host='redis', 
+            port=6379, 
+            db=0, 
+            decode_responses=False, 
+            password="pacman", 
+            health_check_interval=30, 
+            socket_keepalive=True,
+            retry=Retry(ExponentialBackoff(cap=10, base=1), 25),
+            retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError]
+        )
 
 def callback(ch, method, properties, body):
     print(f">>>>>>>>>>> Received message >>>>>>>>>>>")

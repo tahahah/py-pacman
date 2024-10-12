@@ -8,7 +8,6 @@ import sys
 from collections import namedtuple
 from itertools import count
 
-import gym
 import huggingface_hub
 import numpy as np
 import redis
@@ -22,6 +21,10 @@ from datasets import Dataset
 from dotenv import load_dotenv
 from gym.wrappers import FrameStack
 from PIL import Image
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import (ConnectionError, ConnectionResetError,
+                              TimeoutError)
+from redis.retry import Retry
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
@@ -204,7 +207,7 @@ class PacmanTrainer:
         # Declare the queue
         self.channel.queue_declare(queue='HF_upload_queue')
         
-        # Create redis client
+        # Create redis client with retry mechanism
         self.redis_client = redis.StrictRedis(
             host='redis', 
             port=6379, 
@@ -212,7 +215,9 @@ class PacmanTrainer:
             decode_responses=False, 
             password="pacman", 
             health_check_interval=30, 
-            socket_keepalive=True
+            socket_keepalive=True,
+            retry=Retry(ExponentialBackoff(cap=10, base=1), 25),
+            retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError]
         )
         self.episode_keys_buffer = []
 
