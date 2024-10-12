@@ -15,7 +15,7 @@ from PIL import Image
 # Load environment variables from .env file
 load_dotenv()
 wandb.login(key=os.getenv('WANDB_API_KEY'))
-wandb.init(project="PacmanDataGen", user="worker", magic=True)
+wandb.init(project="PacmanDataGen", job_type="worker", magic=True)
 
 # Get HF_TOKEN from environment variables
 HF_TOKEN = os.getenv('HF_TOKEN')

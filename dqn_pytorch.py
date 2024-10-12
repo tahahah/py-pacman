@@ -30,7 +30,7 @@ from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
 # Load environment variables from .env file
 load_dotenv()
 wandb.login(key=os.getenv('WANDB_API_KEY'))
-wandb.init(project="PacmanDataGen", user="pacman", magic=True)
+wandb.init(project="PacmanDataGen", job_type="pacman", magic=True)
 
 # Get HF_TOKEN from environment variables
 HF_TOKEN = os.getenv('HF_TOKEN')
