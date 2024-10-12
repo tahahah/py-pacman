@@ -7,12 +7,15 @@ import tracemalloc  # Add this import for memory profiling
 import pika
 import psutil  # Add this import to monitor memory usage
 import redis
+import wandb
 from datasets import Dataset
 from dotenv import load_dotenv
 from PIL import Image
 
 # Load environment variables from .env file
 load_dotenv()
+wandb.login(key=os.getenv('WANDB_API_KEY'))
+wandb.init(project="PacmanDataGen", user="worker", magic=True)
 
 # Get HF_TOKEN from environment variables
 HF_TOKEN = os.getenv('HF_TOKEN')
@@ -55,7 +58,7 @@ def save_to_hf_dataset(episodes_data):
             logging.info(f"\tEpisode: {episode}")
             logging.info(f"\tNumber of frames: {len(frames_buffer)}, Number of actions: {len(actions_buffer)}")
             logging.info(f"\tNumber of next frames: {len(next_frames_buffer)}, Number of dones: {len(dones_buffer)}")
-            logging.info("--------------------------------------------")
+            logging.info("---------------------------------------------------------")
 
             # Convert frames to PIL images
             frames_buffer = [Image.fromarray(frame) for frame in frames_buffer]
@@ -77,9 +80,10 @@ def save_to_hf_dataset(episodes_data):
 
         # Create dataset with image column
         dataset = Dataset.from_dict(batch_dict)
+        logging.info(f"Dataset size in MB: {dataset.data.nbytes / (1024 * 1024)}")
         dataset.push_to_hub('PacmanDataset_Redis_Try', split='train', token=HF_TOKEN)
         logger.info("\tSaved to Hugging Face dataset")
-
+        logging.info("***********************************************************")
         # Free up memory
         del all_episodes
         del all_frames

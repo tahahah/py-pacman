@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
+import wandb
 from datasets import Dataset
 from dotenv import load_dotenv
 from gym.wrappers import FrameStack
@@ -28,6 +29,8 @@ from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
 
 # Load environment variables from .env file
 load_dotenv()
+wandb.login(key=os.getenv('WANDB_API_KEY'))
+wandb.init(project="PacmanDataGen", user="pacman", magic=True)
 
 # Get HF_TOKEN from environment variables
 HF_TOKEN = os.getenv('HF_TOKEN')
