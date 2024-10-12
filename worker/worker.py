@@ -84,7 +84,7 @@ def save_to_hf_dataset(episodes_data, episode_keys):
         # Create dataset with image column
         dataset = Dataset.from_dict(batch_dict)
         logging.info(f"Dataset size in MB: {dataset.data.nbytes / (1024 * 1024)}")
-        dataset.push_to_hub('PacmanDataset_Redis_Try', split='train', token=HF_TOKEN)
+        dataset.push_to_hub('PacmanDataset_Redis_Try', split='train', token=HF_TOKEN, data_dir=f"data/{episode_keys[0]}_{episode_keys[-1]}")
         logger.info("\tSaved to Hugging Face dataset")
         logging.info("***********************************************************")
 
