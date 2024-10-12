@@ -61,11 +61,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3g  # Increase this value
+          memory: 15g  # Increase this value
         reservations:
-          memory: 1g  # Ensure some memory is reserved
-    mem_limit: 3g  # Set memory limit
-    memswap_limit: 6g  # Set swap memory limit
+          memory: 6g  # Ensure some memory is reserved
+    memswap_limit: 16g  # Set swap memory limit
+    restart: always
 
   redis:
     image: redis:latest
@@ -82,10 +82,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8g  # Increase memory limit
+          memory: 16g  # Increase memory limit
           cpus: "2.0"  # Increase CPU allocation
         reservations:
-          memory: 4g  # Ensure some memory is reserved
+          memory: 12g  # Ensure some memory is reserved
           cpus: "1.0"  # Reserve CPU resources
 
 networks:
