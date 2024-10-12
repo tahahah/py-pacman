@@ -42,7 +42,7 @@ def log_memory_usage():
         logger.info(stat)
 
 # Function to save buffered data to Hugging Face dataset in smaller batches
-def save_to_hf_dataset(episodes_data):
+def save_to_hf_dataset(episodes_data, episode_keys):
     try:
         # Initialize lists to accumulate data
         all_episodes = []
@@ -87,6 +87,12 @@ def save_to_hf_dataset(episodes_data):
         dataset.push_to_hub('PacmanDataset_Redis_Try', split='train', token=HF_TOKEN)
         logger.info("\tSaved to Hugging Face dataset")
         logging.info("***********************************************************")
+
+        
+        # Delete keys from Redis after processing
+        for key in episode_keys:
+            redis_client.delete(key)
+
         # Free up memory
         del all_episodes
         del all_frames
@@ -129,7 +135,7 @@ def callback(ch, method, properties, body):
             episodes_data.append(data)
 
         # Save combined data to Hugging Face dataset
-        save_to_hf_dataset(episodes_data)
+        save_to_hf_dataset(episodes_data, episode_keys)
 
         # Delete keys from Redis after processing
         for key in episode_keys:
