@@ -1,19 +1,23 @@
-
 import argparse
+import json
 import math
 import os
+import pickle
 import queue
+import sys
 from collections import namedtuple
 from itertools import count
 
 import gym
 import huggingface_hub
 import numpy as np
+import redis
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
+import wandb
 from datasets import Dataset
 from dotenv import load_dotenv
 from gym.wrappers import FrameStack
@@ -25,6 +29,8 @@ from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
 
 # Load environment variables from .env file
 load_dotenv()
+wandb.login(key=os.getenv('WANDB_API_KEY'))
+wandb.init(project="PacmanDataGen", user="pacman", magic=True)
 
 # Get HF_TOKEN from environment variables
 HF_TOKEN = os.getenv('HF_TOKEN')
@@ -197,10 +203,68 @@ class PacmanTrainer:
 
         # Declare the queue
         self.channel.queue_declare(queue='HF_upload_queue')
+        
+        # Create redis client
+        self.redis_client = redis.StrictRedis(
+            host='redis', 
+            port=6379, 
+            db=0, 
+            decode_responses=False, 
+            password="pacman", 
+            health_check_interval=30, 
+            socket_keepalive=True
+        )
+        self.episode_keys_buffer = []
 
     def _close_rabbitmq(self):
         if self.connection:
             self.connection.close()
+
+    def _save_data_to_redis(self, episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
+        logging.info("_save_data_to_redis invoked")
+        key = f"episode_{episode}"
+        
+        # Serialize data using pickle
+        data = {
+            'episode': episode,
+            'frames': frames_buffer,
+            'actions': actions_buffer,
+            'next_frames': next_frames_buffer,
+            'dones': dones_buffer
+        }
+        serialized_data = pickle.dumps(data)
+        
+        # Clear the original buffers to free memory
+        frames_buffer.clear()
+        next_frames_buffer.clear()
+        actions_buffer.clear()
+        dones_buffer.clear()
+        
+        # Log the data being saved
+        logging.info(f"Saving data for episode {episode} to Redis with key {key}")
+        
+        self.redis_client.set(key, serialized_data)
+        self.episode_keys_buffer.append(key)
+
+        del data
+        del serialized_data
+        
+        # Log the current buffer size
+        logging.info(f"Current episode keys buffer size: {len(self.episode_keys_buffer)}")
+
+        # Publish keys to the queue every 20 episodes
+        if len(self.episode_keys_buffer) >= 20:
+            logging.info("Buffer size reached 20, publishing keys to queue")
+            self._publish_keys_to_queue()
+            self.episode_keys_buffer.clear()
+            logging.info("Episode keys buffer cleared after publishing")
+
+    def _publish_keys_to_queue(self):
+        if self.enable_rmq:
+            message = json.dumps(self.episode_keys_buffer)
+            self.channel.basic_publish(exchange='', routing_key='HF_upload_queue', body=message)
+            logging.info(f"Published keys to RabbitMQ queue 'HF_upload_queue': {self.episode_keys_buffer}")
+
 
     def train(self):
         if self.enable_rmq:
@@ -213,8 +277,7 @@ class PacmanTrainer:
         self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
 
         frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
-        batch_id = 0
-        max_batch_size = 400 * 1024 * 1024  # 400 MB
+        max_batch_size = 500 * 1024 * 1024  # 400 MB
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
@@ -251,49 +314,32 @@ class PacmanTrainer:
                     break
 
                 # Check if the batch size limit is reached
-                if self.enable_rmq:
-                    buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-                    if buffer_size >= max_batch_size:
-                        logging.info(f"Buffer size: {buffer_size} bytes")
-                        data_record = DataRecord(
-                            episode=i_episode,
-                            frames=frames_buffer.copy(),
-                            actions=actions_buffer.copy(),
-                            next_frames=next_frames_buffer.copy(),
-                            dones=dones_buffer.copy(),
-                            batch_id=batch_id,
-                            is_last_batch=False
-                        )
-                        self._save_data(data_record)
-                        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
-                        batch_id += 1
+            if self.enable_rmq:
+                buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+                logging.info(f"Buffer size: {buffer_size} bytes")
+                if buffer_size >= max_batch_size:
+                    logging.warning("BUFFER SIZE EXCEEDING 500MB")
+                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                # batch_id += 1
 
             # Send remaining data at the end of the episode
-            if frames_buffer:
-                data_record = DataRecord(
-                    episode=i_episode,
-                    frames=frames_buffer.copy(),
-                    actions=actions_buffer.copy(),
-                    next_frames=next_frames_buffer.copy(),
-                    dones=dones_buffer.copy(),
-                    batch_id=batch_id,
-                    is_last_batch=True
-                )
-                self._save_data(data_record)
+            if frames_buffer and self.enable_rmq:
+                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
                 frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
-                batch_id = 0
 
-            if i_episode % 10 == 0:
-                self.agent.update_target_network()
-                logging.info(f"Updated target network at episode {i_episode}")
-                torch.cuda.empty_cache()
-                logging.info(torch.cuda.memory_summary())
-                torch.autograd.set_detect_anomaly(True)
+            if i_episode > 2: 
+                if i_episode % 10 == 0:
+                    self.agent.update_target_network()
+                    logging.info(f"Updated target network at episode {i_episode}")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        logging.info(torch.cuda.memory_summary())
+                    torch.autograd.set_detect_anomaly(True)
 
-
-            if i_episode % 1000 == 0:
-                self.agent.save_model('pacman.pth')
-                logging.info(f"Saved model at episode {i_episode}")
+                if i_episode % 1000 == 0:
+                    self.agent.save_model('pacman.pth')
+                    logging.info(f"Saved model at episode {i_episode}")
 
         logging.info('Training Complete')
         self.env.close()
@@ -304,8 +350,9 @@ class PacmanTrainer:
     def _get_buffer_size(self, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
         # Estimate the size of the buffers in bytes
         buffer_size = sum([frame.nbytes for frame in frames_buffer]) + \
-               sum([frame.nbytes for frame in next_frames_buffer]) + \
-               len(actions_buffer) * 4 + len(dones_buffer) * 1
+                      sum([frame.nbytes for frame in next_frames_buffer]) + \
+                      sum([sys.getsizeof(action) for action in actions_buffer]) + \
+                      sum([sys.getsizeof(done) for done in dones_buffer])
         return buffer_size
 
     def _get_epsilon(self, frame_idx):

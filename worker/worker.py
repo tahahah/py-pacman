@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import pickle
@@ -5,12 +6,16 @@ import tracemalloc  # Add this import for memory profiling
 
 import pika
 import psutil  # Add this import to monitor memory usage
+import redis
+import wandb
 from datasets import Dataset
 from dotenv import load_dotenv
 from PIL import Image
 
 # Load environment variables from .env file
 load_dotenv()
+wandb.login(key=os.getenv('WANDB_API_KEY'))
+wandb.init(project="PacmanDataGen", user="worker", magic=True)
 
 # Get HF_TOKEN from environment variables
 HF_TOKEN = os.getenv('HF_TOKEN')
@@ -34,96 +39,96 @@ def log_memory_usage():
         logger.info(stat)
 
 # Function to save buffered data to Hugging Face dataset in smaller batches
-def save_to_hf_dataset(data):
+def save_to_hf_dataset(episodes_data):
     try:
-        # Extract data from the dictionary
-        logging.info("\tsave_to_hf_dataset invoked")
-        episode = data['episode']
-        frames_buffer = data['frames']
-        actions_buffer = data['actions']
-        next_frames_buffer = data['next_frames']
-        dones_buffer = data['dones']
-        
-        logging.info(f"\tEpisode: {episode}")
-        logging.info(f"\tNumber of frames: {len(frames_buffer)}, Number of actions: {len(actions_buffer)}")
-        logging.info(f"\tNumber of next frames: {len(next_frames_buffer)}, Number of dones: {len(dones_buffer)}")
+        # Initialize lists to accumulate data
+        all_episodes = []
+        all_frames = []
+        all_actions = []
+        all_next_frames = []
+        all_dones = []
 
-        # Convert frames to PIL images
-        frames_buffer = [Image.fromarray(frame) for frame in frames_buffer]
-        next_frames_buffer = [Image.fromarray(frame) for frame in next_frames_buffer]
-        
+        for data in episodes_data:
+            episode = data['episode']
+            frames_buffer = data['frames']
+            actions_buffer = data['actions']
+            next_frames_buffer = data['next_frames']
+            dones_buffer = data['dones']
+
+            logging.info(f"\tEpisode: {episode}")
+            logging.info(f"\tNumber of frames: {len(frames_buffer)}, Number of actions: {len(actions_buffer)}")
+            logging.info(f"\tNumber of next frames: {len(next_frames_buffer)}, Number of dones: {len(dones_buffer)}")
+            logging.info("---------------------------------------------------------")
+
+            # Convert frames to PIL images
+            frames_buffer = [Image.fromarray(frame) for frame in frames_buffer]
+            next_frames_buffer = [Image.fromarray(frame) for frame in next_frames_buffer]
+
+            all_episodes.extend([episode] * len(frames_buffer))
+            all_frames.extend(frames_buffer)
+            all_actions.extend(actions_buffer)
+            all_next_frames.extend(next_frames_buffer)
+            all_dones.extend(dones_buffer)
+
         batch_dict = {
-            'episode': [episode] * len(frames_buffer),
-            'frame_image': frames_buffer,
-            'action': actions_buffer,
-            'next_frame_image': next_frames_buffer,
-            'done': dones_buffer
+            'episode': all_episodes,
+            'frame_image': all_frames,
+            'action': all_actions,
+            'next_frame_image': all_next_frames,
+            'done': all_dones
         }
-        
+
         # Create dataset with image column
         dataset = Dataset.from_dict(batch_dict)
-        
-        
-        dataset.push_to_hub('PacmanDataset_2', split='train', token=HF_TOKEN, config_name=f"episode_{episode}")
+        logging.info(f"Dataset size in MB: {dataset.data.nbytes / (1024 * 1024)}")
+        dataset.push_to_hub('PacmanDataset_Redis_Try', split='train', token=HF_TOKEN)
         logger.info("\tSaved to Hugging Face dataset")
-
+        logging.info("***********************************************************")
         # Free up memory
-        del frames_buffer
-        del next_frames_buffer
+        del all_episodes
+        del all_frames
+        del all_actions
+        del all_next_frames
+        del all_dones
         del batch_dict
         del dataset
-        
+
     except Exception as e:
         logger.error("Failed to save to Hugging Face dataset", exc_info=True)
 
 # Dictionary to keep track of batches
 batch_data = {}
 
+# Redis client
+redis_client = redis.StrictRedis(host='redis', port=6379, db=0, decode_responses=False, password="pacman", health_check_interval=30, socket_keepalive=True)
+
+
+
 def callback(ch, method, properties, body):
     print(f">>>>>>>>>>> Received message >>>>>>>>>>>")
     try:
-        # log_memory_usage()  # Log memory usage before processing
         # Deserialize the message
-        data = pickle.loads(body)
-        logging.info("Data unpacked")
-        print(data.keys())
-        episode = data['episode']
-        batch_id = data['batch_id']
-        is_last_batch = data['is_last_batch']
+        episode_keys = json.loads(body)
+        logging.info(f"Received episode keys: {episode_keys}")
 
-        # Initialize episode entry if not exists
-        if episode not in batch_data:
-            batch_data[episode] = {}
+        episodes_data = []
+        for key in episode_keys:
+            # Deserialize the data using pickle
+            data = pickle.loads(redis_client.get(key))
+            episodes_data.append(data)
 
-        # Store batch data
-        batch_data[episode][batch_id] = data
+        # Save combined data to Hugging Face dataset
+        save_to_hf_dataset(episodes_data)
 
-        # Check if all batches are received
-        if is_last_batch:
-            combined_data = {
-                'episode': episode,
-                'frames': [],
-                'actions': [],
-                'next_frames': [],
-                'dones': []
-            }
-            for batch_id in sorted(batch_data[episode].keys()):
-                batch = batch_data[episode][batch_id]
-                combined_data['frames'].extend(batch['frames'])
-                combined_data['actions'].extend(batch['actions'])
-                combined_data['next_frames'].extend(batch['next_frames'])
-                combined_data['dones'].extend(batch['dones'])
+        # Delete keys from Redis after processing
+        for key in episode_keys:
+            redis_client.delete(key)
 
-            # Save combined data to Hugging Face dataset
-            save_to_hf_dataset(combined_data)
-            
-
-            # Clear stored data for the episode
-            del batch_data[episode]
         logging.info("<<<<<<<<<<< Processed message <<<<<<<<<<<")
 
     except Exception as e:
         logger.error("Failed to process message", exc_info=True)
+
 
 def main():
     credentials = pika.PlainCredentials('worker', 'worker_pass')
