@@ -8,6 +8,7 @@ import pika
 import psutil  # Add this import to monitor memory usage
 import redis
 import wandb
+import zstandard as zstd
 from datasets import Dataset
 from dotenv import load_dotenv
 from PIL import Image
@@ -120,6 +121,8 @@ redis_client = redis.StrictRedis(
             retry=Retry(ExponentialBackoff(cap=10, base=1), 25),
             retry_on_error=[ConnectionError, TimeoutError]
         )
+decompressor = zstd.ZstdDecompressor()
+
 
 def callback(ch, method, properties, body):
     print(f">>>>>>>>>>> Received message >>>>>>>>>>>")
@@ -131,7 +134,9 @@ def callback(ch, method, properties, body):
         episodes_data = []
         for key in episode_keys:
             # Deserialize the data using pickle
-            data = pickle.loads(redis_client.get(key))
+            compressed_data = redis_client.get(key)
+            decompressed_data = decompressor.decompress(compressed_data)
+            data = pickle.loads(decompressed_data)
             episodes_data.append(data)
 
         # Save combined data to Hugging Face dataset

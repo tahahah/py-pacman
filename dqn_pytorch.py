@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as T
 import wandb
+import zstandard as zstd
 from datasets import Dataset
 from dotenv import load_dotenv
 from gym.wrappers import FrameStack
@@ -238,6 +239,16 @@ class PacmanTrainer:
         }
         serialized_data = pickle.dumps(data)
         
+        # Compress the serialized data
+        cctx = zstd.ZstdCompressor()
+        compressed_data = cctx.compress(serialized_data)
+        
+        # Log the sizes of the serialized and compressed data
+        original_size = sys.getsizeof(serialized_data)
+        compressed_size = len(compressed_data)
+        compression_ratio = compressed_size / original_size
+        logging.info(f"Original size: {original_size} bytes, Compressed size: {compressed_size} bytes, Compression ratio: {compression_ratio:.2f}")
+        
         # Clear the original buffers to free memory
         frames_buffer.clear()
         next_frames_buffer.clear()
@@ -245,13 +256,14 @@ class PacmanTrainer:
         dones_buffer.clear()
         
         # Log the data being saved
-        logging.info(f"Saving data for episode {episode} to Redis with key {key}")
+        logging.info(f"Saving compressed data for episode {episode} to Redis with key {key}")
         
-        self.redis_client.set(key, serialized_data)
+        self.redis_client.set(key, compressed_data)
         self.episode_keys_buffer.append(key)
 
         del data
         del serialized_data
+        del compressed_data
         
         # Log the current buffer size
         logging.info(f"Current episode keys buffer size: {len(self.episode_keys_buffer)}")

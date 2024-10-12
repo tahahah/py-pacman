@@ -85,3 +85,4 @@ wandb==0.18.3
 xxhash==3.5.0
 yarl==1.11.1
 zipp==3.20.2
+zstandard==0.23.0
