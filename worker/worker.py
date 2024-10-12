@@ -12,8 +12,7 @@ from datasets import Dataset
 from dotenv import load_dotenv
 from PIL import Image
 from redis.backoff import ExponentialBackoff
-from redis.exceptions import (ConnectionError, ConnectionResetError,
-                              TimeoutError)
+from redis.exceptions import ConnectionError, TimeoutError
 from redis.retry import Retry
 
 # Load environment variables from .env file
@@ -113,7 +112,7 @@ redis_client = redis.StrictRedis(
             health_check_interval=30, 
             socket_keepalive=True,
             retry=Retry(ExponentialBackoff(cap=10, base=1), 25),
-            retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError]
+            retry_on_error=[ConnectionError, TimeoutError]
         )
 
 def callback(ch, method, properties, body):

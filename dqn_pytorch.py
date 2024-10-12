@@ -22,8 +22,7 @@ from dotenv import load_dotenv
 from gym.wrappers import FrameStack
 from PIL import Image
 from redis.backoff import ExponentialBackoff
-from redis.exceptions import (ConnectionError, ConnectionResetError,
-                              TimeoutError)
+from redis.exceptions import ConnectionError, TimeoutError
 from redis.retry import Retry
 
 from replay_buffer import ReplayBuffer
@@ -217,7 +216,7 @@ class PacmanTrainer:
             health_check_interval=30, 
             socket_keepalive=True,
             retry=Retry(ExponentialBackoff(cap=10, base=1), 25),
-            retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError]
+            retry_on_error=[ConnectionError, TimeoutError]
         )
         self.episode_keys_buffer = []
 
