@@ -370,10 +370,15 @@ class PacmanTrainer:
                       sum([sys.getsizeof(action) for action in actions_buffer]) + \
                       sum([sys.getsizeof(done) for done in dones_buffer])
         return buffer_size
-
+    
     def _get_epsilon(self, frame_idx):
-        return 0.1 + (1.0 - 0.1) * math.exp(-1. * frame_idx / 1e7)
+        # Start with a lower initial epsilon and decay faster
+        initial_epsilon = 0.5  # Lower initial exploration rate
+        min_epsilon = 0.1      # Minimum exploration rate
+        decay_rate = 5e6       # Faster decay rate
 
+        return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
+    
     def _save_data(self, data_record: DataRecord):
         self.save_queue.put(data_record)
         if self.enable_rmq:
