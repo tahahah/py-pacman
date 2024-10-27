@@ -161,6 +161,9 @@ class Game(object):
             pg.display.flip()
             self.clock.tick(60)
 
+            # Add a small positive reward for each time step to encourage longer survival
+            self.add_reward(0.01)
+
     def event_loop(self):
         if self.game_mode in MOVE_MODES:
             if self.ai_agent is None:
