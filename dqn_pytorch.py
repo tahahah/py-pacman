@@ -327,6 +327,10 @@ class PacmanTrainer:
                     if self.save_locally:
                         self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
                     logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward}")
+                    
+                    # Log the reward to wandb
+                    wandb.log({"episode": i_episode, "reward": ep_reward})
+                    
                     break
 
                 # Check if the batch size limit is reached
