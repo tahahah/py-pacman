@@ -41,7 +41,7 @@ def log_memory_usage():
     logger.info("Top 10 memory usage lines:")
     for stat in top_stats[:10]:
         logger.info(stat)
-
+        
 # Function to save buffered data to Hugging Face dataset in smaller batches
 def save_to_hf_dataset(episodes_data, episode_keys):
     try:
@@ -49,43 +49,33 @@ def save_to_hf_dataset(episodes_data, episode_keys):
         all_episodes = []
         all_frames = []
         all_actions = []
-        all_next_frames = []
-        all_dones = []
 
         for data in episodes_data:
             episode = data['episode']
             frames_buffer = data['frames']
             actions_buffer = data['actions']
-            next_frames_buffer = data['next_frames']
-            dones_buffer = data['dones']
 
             logging.info(f"\tEpisode: {episode}")
-            logging.info(f"\tNumber of frames: {len(frames_buffer)}, Number of actions: {len(actions_buffer)}")
-            logging.info(f"\tNumber of next frames: {len(next_frames_buffer)}, Number of dones: {len(dones_buffer)}")
+            logging.info(f"\tNumber of frames: {len(frames_buffer)}")
             logging.info("---------------------------------------------------------")
 
             # Convert frames to PIL images
             frames_buffer = [Image.fromarray(frame) for frame in frames_buffer]
-            next_frames_buffer = [Image.fromarray(frame) for frame in next_frames_buffer]
 
             all_episodes.extend([episode] * len(frames_buffer))
             all_frames.extend(frames_buffer)
             all_actions.extend(actions_buffer)
-            all_next_frames.extend(next_frames_buffer)
-            all_dones.extend(dones_buffer)
 
         batch_dict = {
             'episode': all_episodes,
             'frame_image': all_frames,
-            'action': all_actions,
-            'next_frame_image': all_next_frames,
-            'done': all_dones
+            'action': all_actions
         }
 
         # Create dataset with image column
         dataset = Dataset.from_dict(batch_dict)
         logging.info(f"Dataset size in MB: {dataset.data.nbytes / (1024 * 1024)}")
-        dataset.push_to_hub('PacmanDataset_3', split='train', token=HF_TOKEN, data_dir=f"data/{episode_keys[0]}_{episode_keys[-1]}")
+        dataset.push_to_hub('PacmanDataset_4', split='train', token=HF_TOKEN, data_dir=f"data/{episode_keys[0]}_{episode_keys[-1]}")
         logger.info("\tSaved to Hugging Face dataset")
         logging.info("***********************************************************")
 
@@ -98,8 +88,6 @@ def save_to_hf_dataset(episodes_data, episode_keys):
         del all_episodes
         del all_frames
         del all_actions
-        del all_next_frames
-        del all_dones
         del batch_dict
         del dataset
 

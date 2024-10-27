@@ -7,7 +7,7 @@ import queue
 import sys
 from collections import namedtuple
 from itertools import count
-
+from ActionEncoder import ActionEncoder
 import huggingface_hub
 import numpy as np
 import redis
@@ -153,14 +153,10 @@ import logging
 from typing import Any, List
 
 from pydantic import BaseModel, Field
-
-
 class DataRecord(BaseModel):
     episode: int
     frames: List[Any]
     actions: List[int]
-    next_frames: List[Any]
-    dones: List[bool]
     batch_id: int
     is_last_batch: bool
 
@@ -177,6 +173,7 @@ class PacmanTrainer:
         self.channel = None
         self.save_locally = save_locally | False
         self.enable_rmq = enable_rmq
+        self.action_encoder = ActionEncoder()
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     def _create_environment(self):
@@ -225,7 +222,7 @@ class PacmanTrainer:
         if self.connection:
             self.connection.close()
 
-    def _save_data_to_redis(self, episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
+    def _save_data_to_redis(self, episode, frames_buffer, actions_buffer):
         logging.info("_save_data_to_redis invoked")
         key = f"episode_{episode}"
         
@@ -233,9 +230,7 @@ class PacmanTrainer:
         data = {
             'episode': episode,
             'frames': frames_buffer,
-            'actions': actions_buffer,
-            'next_frames': next_frames_buffer,
-            'dones': dones_buffer
+            'actions': actions_buffer
         }
         serialized_data = pickle.dumps(data)
         
@@ -251,9 +246,7 @@ class PacmanTrainer:
         
         # Clear the original buffers to free memory
         frames_buffer.clear()
-        next_frames_buffer.clear()
         actions_buffer.clear()
-        dones_buffer.clear()
         
         # Log the data being saved
         logging.info(f"Saving compressed data for episode {episode} to Redis with key {key}")
@@ -292,7 +285,7 @@ class PacmanTrainer:
         self.agent = PacmanAgent(screen.shape, n_actions)
         self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
 
-        frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+        frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
 
         for i_episode in range(self.episodes):
@@ -311,12 +304,8 @@ class PacmanTrainer:
                 reward = max(-1.0, min(reward, 1.0))
                 ep_reward += reward
 
-                next_frame = self.env.render(mode='rgb_array')
-
                 frames_buffer.append(current_frame)
-                actions_buffer.append(action)
-                next_frames_buffer.append(next_frame)
-                dones_buffer.append(done)
+                actions_buffer.append(self.action_encoder(action))
 
                 self.memory.cache(state, next_state, action, reward, done)
 
@@ -335,18 +324,18 @@ class PacmanTrainer:
 
                 # Check if the batch size limit is reached
             if self.enable_rmq:
-                buffer_size = self._get_buffer_size(frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
+                buffer_size = self._get_buffer_size(frames_buffer, actions_buffer)
                 logging.info(f"Buffer size: {buffer_size} bytes")
                 if buffer_size >= max_batch_size:
                     logging.warning("BUFFER SIZE EXCEEDING 500MB")
-                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
+                frames_buffer, actions_buffer = [], []
                 # batch_id += 1
 
             # Send remaining data at the end of the episode
             if frames_buffer and self.enable_rmq:
-                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer)
-                frames_buffer, actions_buffer, next_frames_buffer, dones_buffer = [], [], [], []
+                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
+                frames_buffer, actions_buffer = [], []
 
             if i_episode > 2: 
                 if i_episode % 10 == 0:
@@ -367,14 +356,11 @@ class PacmanTrainer:
         if self.enable_rmq:
             self._close_rabbitmq()
 
-    def _get_buffer_size(self, frames_buffer, actions_buffer, next_frames_buffer, dones_buffer):
+    def _get_buffer_size(self, frames_buffer, actions_buffer):
         # Estimate the size of the buffers in bytes
         buffer_size = sum([frame.nbytes for frame in frames_buffer]) + \
-                      sum([frame.nbytes for frame in next_frames_buffer]) + \
-                      sum([sys.getsizeof(action) for action in actions_buffer]) + \
-                      sum([sys.getsizeof(done) for done in dones_buffer])
+                      sum([sys.getsizeof(action) for action in actions_buffer])
         return buffer_size
-    
     def _get_epsilon(self, frame_idx):
         # Start with a lower initial epsilon and decay faster
         initial_epsilon = 0.5  # Lower initial exploration rate
