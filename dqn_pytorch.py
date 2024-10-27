@@ -329,7 +329,7 @@ class PacmanTrainer:
                     logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward}")
                     
                     # Log the reward to wandb
-                    wandb.log({"episode": i_episode, "reward": ep_reward})
+                    wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": self.env.maze.get_number_of_pellets()})
                     
                     break
 
