@@ -160,7 +160,8 @@ def main():
         '/',
         credentials,
         connection_attempts=10,
-        retry_delay=5
+        retry_delay=5,
+        heartbeat=300,
     )
     connection = pika.BlockingConnection(parameters)
     channel = connection.channel()
