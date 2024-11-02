@@ -303,9 +303,10 @@ class PacmanTrainer:
                 next_state, reward, done, _ = self.env.step(action)
                 reward = max(-1.0, min(reward, 1.0))
                 ep_reward += reward
-
-                frames_buffer.append(current_frame)
-                actions_buffer.append(self.action_encoder(action))
+                
+                if self.enable_rmq or self.save_locally:
+                    frames_buffer.append(current_frame)
+                    actions_buffer.append(self.action_encoder(action))
 
                 self.memory.cache(state, next_state, action, reward, done)
 
