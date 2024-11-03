@@ -110,7 +110,7 @@ class PacmanAgent:
         self.target_net = DuelingDQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00005, eps=1.5e-4)
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00002, eps=1.5e-4)
         self.steps_done = 0
 
         # Try to load the model from Hugging Face if it exists
