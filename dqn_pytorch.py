@@ -68,13 +68,8 @@ class RainbowDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
             nn.Flatten()
         )
 
-        # Calculate the size of the flattened feature map
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, c, h, w)
-            n_flatten = self.features(dummy_input).shape[1]
-
         # Noisy Linear Layers
-        self.noisy_linear1 = NoisyLinear(n_flatten, 512)
+        self.noisy_linear1 = NoisyLinear(3136, 512)
         self.noisy_linear2 = NoisyLinear(512, 512)
 
         # Dueling Network
@@ -114,25 +109,44 @@ class NoisyLinear(nn.Module):
         super(NoisyLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = nn.Parameter(torch.Tensor(out_features, in_features))
-        self.bias = nn.Parameter(torch.Tensor(out_features))
-        self.noisy_weight = nn.Parameter(torch.Tensor(out_features, in_features))
-        self.noisy_bias = nn.Parameter(torch.Tensor(out_features))
+        
+        # Initialize regular weights and biases
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.bias = nn.Parameter(torch.empty(out_features))
+        
+        # Initialize noisy weights and biases
+        self.noisy_weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.noisy_bias = nn.Parameter(torch.empty(out_features))
+        
+        # Initialize parameters
+        self.reset_parameters()
         self.reset_noise()
-        self.register_parameter('weight', self.weight)
-        self.register_parameter('bias', self.bias)
-        self.register_parameter('noisy_weight', self.noisy_weight)
-        self.register_parameter('noisy_bias', self.noisy_bias)
+
+    def reset_parameters(self):
+        # Standard initialization for weights and biases
+        std = math.sqrt(3 / self.in_features)
+        self.weight.data.uniform_(-std, std)
+        self.bias.data.uniform_(-std, std)
 
     def forward(self, x):
+        # Ensure input tensor is properly shaped
+        if len(x.shape) == 3:
+            x = x.view(-1, self.in_features)
+        elif len(x.shape) == 4:
+            x = x.view(x.size(0), -1)
+            
         return F.linear(x, self.weight + self.noisy_weight, self.bias + self.noisy_bias)
 
     def reset_noise(self):
-        eps_input = torch.randn(self.in_features)
-        eps_output = torch.randn(self.out_features)
+        epsilon_in = self._scale_noise(self.in_features)
+        epsilon_out = self._scale_noise(self.out_features)
         
-        self.noisy_weight.data = torch.outer(eps_input, eps_output) * 0.4 / self.in_features
-        self.noisy_bias.data = eps_output * 0.4
+        self.noisy_weight.data = torch.outer(epsilon_out, epsilon_in)
+        self.noisy_bias.data = epsilon_out
+
+    def _scale_noise(self, size):
+        x = torch.randn(size)
+        return x.sign().mul_(x.abs().sqrt_())
 
 class PacmanAgent:
     def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbowDQN"):
