@@ -67,18 +67,23 @@ class RainbowDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
             nn.ReLU(),
             nn.Flatten()
         )
-        
+
+        # Calculate the size of the flattened feature map
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, c, h, w)
+            n_flatten = self.features(dummy_input).shape[1]
+
         # Noisy Linear Layers
-        self.noisy_linear1 = NoisyLinear(3136, 512)
+        self.noisy_linear1 = NoisyLinear(n_flatten, 512)
         self.noisy_linear2 = NoisyLinear(512, 512)
-        
+
         # Dueling Network
         self.value_stream = nn.Sequential(
             nn.Linear(512, 512),
             nn.ReLU(),
             nn.Linear(512, ATOMS)
         )
-        
+
         self.advantage_stream = nn.Sequential(
             nn.Linear(512, 512),
             nn.ReLU(),
@@ -89,10 +94,10 @@ class RainbowDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         features = self.features(x)
         noisy1 = self.noisy_linear1(features)
         noisy2 = self.noisy_linear2(noisy1)
-        
+
         values = self.value_stream(noisy2).view(-1, 1, ATOMS)
         advantages = self.advantage_stream(noisy2).view(-1, self.output_dim, ATOMS)
-        
+
         # Compute Q-values
         q_values = values + (advantages - advantages.mean(dim=1, keepdim=True))
         return q_values
