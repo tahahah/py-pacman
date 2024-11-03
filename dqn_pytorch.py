@@ -103,76 +103,6 @@ class DuelingDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         advantages = self.advantage_stream(features)
         return values + (advantages - advantages.mean(dim=1, keepdim=True))
 
-class PrioritizedReplayBuffer:
-    def __init__(self, size, alpha=0.6):
-        self.size = size
-        self.alpha = alpha
-        self.beta = 0.4
-        self.beta_increment = 0.001
-        
-        self.curr_size = 0
-        self.pos = 0
-        
-        self.states = np.zeros((size, 4, 84, 84), dtype=np.float32)
-        self.next_states = np.zeros((size, 4, 84, 84), dtype=np.float32)
-        self.actions = np.zeros(size, dtype=np.int64)
-        self.rewards = np.zeros(size, dtype=np.float32)
-        self.dones = np.zeros(size, dtype=np.bool)
-        
-        tree_capacity = 1
-        while tree_capacity < size:
-            tree_capacity *= 2
-            
-        self.sum_tree = SumSegmentTree(tree_capacity)
-        self.min_tree = MinSegmentTree(tree_capacity)
-        self.max_priority = 1.0
-
-    def push(self, state, next_state, action, reward, done):
-        self.states[self.pos] = state
-        self.next_states[self.pos] = next_state
-        self.actions[self.pos] = action
-        self.rewards[self.pos] = reward
-        self.dones[self.pos] = done
-        
-        self.sum_tree[self.pos] = self.max_priority ** self.alpha
-        self.min_tree[self.pos] = self.max_priority ** self.alpha
-        
-        self.pos = (self.pos + 1) % self.size
-        self.curr_size = min(self.curr_size + 1, self.size)
-
-    def sample(self, batch_size):
-        indices = []
-        weights = np.zeros(batch_size, dtype=np.float32)
-        total = self.sum_tree.sum(0, self.curr_size)
-        
-        min_prob = self.min_tree.min() / total
-        max_weight = (min_prob * self.curr_size) ** (-self.beta)
-        
-        for i in range(batch_size):
-            mass = random.random() * total
-            idx = self.sum_tree.find_prefixsum_idx(mass)
-            indices.append(idx)
-            
-            prob = self.sum_tree[idx] / total
-            weights[i] = (prob * self.curr_size) ** (-self.beta) / max_weight
-            
-        self.beta = min(1.0, self.beta + self.beta_increment)
-        
-        states = torch.FloatTensor(self.states[indices]).to(device)
-        next_states = torch.FloatTensor(self.next_states[indices]).to(device)
-        actions = torch.LongTensor(self.actions[indices]).to(device)
-        rewards = torch.FloatTensor(self.rewards[indices]).to(device)
-        dones = torch.BoolTensor(self.dones[indices]).to(device)
-        weights = torch.FloatTensor(weights).to(device)
-        
-        return states, next_states, actions, rewards, dones, indices, weights
-
-    def update_priorities(self, indices, priorities):
-        for idx, priority in zip(indices, priorities):
-            priority = max(priority, 1e-6)
-            self.max_priority = max(self.max_priority, priority)
-            self.sum_tree[idx] = priority ** self.alpha
-            self.min_tree[idx] = priority ** self.alpha
 
 class PacmanAgent:
     def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_duelingDQN"):
@@ -180,7 +110,7 @@ class PacmanAgent:
         self.target_net = DuelingDQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.0001, eps=1.5e-4)
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00005, eps=1.5e-4)
         self.steps_done = 0
 
         # Try to load the model from Hugging Face if it exists
