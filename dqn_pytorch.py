@@ -31,6 +31,8 @@ from src.env.pacman_env import PacmanEnv
 from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
 import random
 
+from rainbow_dqn_model import DQN
+
 # Load environment variables from .env file
 load_dotenv()
 wandb.login(key=os.getenv('WANDB_API_KEY'))
@@ -52,231 +54,57 @@ V_MIN = -10  # adjusted for Pacman environment
 V_MAX = 10  # adjusted for Pacman environment
 SUPPORT = torch.linspace(V_MIN, V_MAX, ATOMS).to(device)
 
-class RainbowDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
-    def __init__(self, input_dim, output_dim):
-        super(RainbowDQN, self).__init__()
-        c, h, w = input_dim
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-
-        # Feature extraction layers
-        self.features = nn.Sequential(
-            nn.Conv2d(in_channels=c, out_channels=32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten()
-        )
-
-        # Noisy Linear Layers
-        self.noisy_linear1 = NoisyLinear(3136, 512)
-        self.noisy_linear2 = NoisyLinear(512, 512)
-
-        # Dueling Network
-        self.value_stream = nn.Sequential(
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, ATOMS)
-        )
-
-        self.advantage_stream = nn.Sequential(
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, ATOMS * output_dim)
-        )
-
-    def forward(self, x):
-        features = self.features(x)
-        noisy1 = self.noisy_linear1(features)
-        noisy2 = self.noisy_linear2(noisy1)
-
-        values = self.value_stream(noisy2).view(-1, 1, ATOMS)
-        advantages = self.advantage_stream(noisy2).view(-1, self.output_dim, ATOMS)
-
-        # Compute Q-values
-        q_values = values + (advantages - advantages.mean(dim=1, keepdim=True))
-        return q_values
-
-    def reset_noise(self):
-        self.noisy_linear1.reset_noise()
-        self.noisy_linear2.reset_noise()
-
-class NoisyLinear(nn.Module):
-    def __init__(self, in_features, out_features):
-        super(NoisyLinear, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        
-        # Initialize regular weights and biases
-        self.weight = nn.Parameter(torch.empty(out_features, in_features))
-        self.bias = nn.Parameter(torch.empty(out_features))
-        
-        # Initialize noisy weights and biases
-        self.noisy_weight = nn.Parameter(torch.empty(out_features, in_features))
-        self.noisy_bias = nn.Parameter(torch.empty(out_features))
-        
-        # Initialize parameters
-        self.reset_parameters()
-        self.reset_noise()
-
-    def reset_parameters(self):
-        # Standard initialization for weights and biases
-        std = math.sqrt(3 / self.in_features)
-        self.weight.data.uniform_(-std, std)
-        self.bias.data.uniform_(-std, std)
-
-    def forward(self, x):
-        # Ensure input tensor is properly shaped
-        if len(x.shape) == 3:
-            x = x.view(-1, self.in_features)
-        elif len(x.shape) == 4:
-            x = x.view(x.size(0), -1)
-            
-        return F.linear(x, self.weight + self.noisy_weight, self.bias + self.noisy_bias)
-
-    def reset_noise(self):
-        epsilon_in = self._scale_noise(self.in_features)
-        epsilon_out = self._scale_noise(self.out_features)
-        
-        self.noisy_weight.data = torch.outer(epsilon_out, epsilon_in)
-        self.noisy_bias.data = epsilon_out
-
-    def _scale_noise(self, size):
-        x = torch.randn(size)
-        return x.sign().mul_(x.abs().sqrt_())
-    
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbowDQN"):
-        self.q_network = RainbowDQN(input_dim, output_dim).to(device)
-        self.target_network = RainbowDQN(input_dim, output_dim).to(device)
-        self.target_network.load_state_dict(self.q_network.state_dict())
-        self.optimizer = optim.Adam(self.q_network.parameters(), lr=0.00025)
+    def __init__(self, input_dim, output_dim, args, model_name="pacman_policy_net_gamengen_1_rainbowDQN"):
+        self.atoms = args.atoms
+        self.Vmin = args.V_min
+        self.Vmax = args.V_max
+        self.support = torch.linspace(args.V_min, args.V_max, self.atoms).to(device=device)
+        self.delta_z = (args.V_max - args.V_min) / (self.atoms - 1)
+        self.batch_size = args.batch_size
+        self.n = args.multi_step
+        self.discount = args.discount
+        self.norm_clip = args.norm_clip
+
+        self.online_net = DQN(input_dim, output_dim).to(device=device)
+        self.target_net = DQN(input_dim, output_dim).to(device=device)
+        self.update_target_net()
+        for param in self.target_net.parameters():
+            param.requires_grad = False
+
+        self.optimizer = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+
+        # Additional functionality from original class
         self.model_name = model_name
         self.steps_done = 0
+        self.HF_TOKEN = os.getenv('HF_TOKEN')
 
         # Try to load the model from Hugging Face if it exists
-        self.model_name = model_name
         try:
-            huggingface_hub.login(token=HF_TOKEN)
+            huggingface_hub.login(token=self.HF_TOKEN)
             model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
             state_dict = torch.load(model_path, map_location=device)
-            self.q_network.load_state_dict(state_dict)
-            self.target_network.load_state_dict(state_dict)
+            self.online_net.load_state_dict(state_dict)
+            self.target_net.load_state_dict(state_dict)
             logging.info(f"Model loaded from Hugging Face: {self.model_name}")
         except Exception as e:
             logging.warning(f"Could not load model from Hugging Face: {e}")
 
     def select_action(self, state, epsilon, n_actions):
+        # Modified to match the original class's behavior
         if random.random() < epsilon:
             return random.randrange(n_actions)
         else:
-            with torch.no_grad():
-                # Check if state is already a tensor
-                if not isinstance(state, torch.Tensor):
-                    state = torch.FloatTensor(state.__array__()).to(device)
-                
-                # Ensure state has correct shape [batch_size, channels, height, width]
-                if len(state.shape) == 3:
-                    state = state.unsqueeze(0)
-                
-                dist = self.q_network(state)
-                # Calculate expected value for each action
-                q_values = (dist * SUPPORT.unsqueeze(0).unsqueeze(0)).sum(2)
-                return q_values.max(1)[1].item()
+            return self.act(state)
 
-    def optimize_model(self, memory, gamma=0.99, n_step=3):
-        if len(memory.buffer) < 1000:  # Wait for enough samples
-            return
-
-        # Sample from prioritized replay buffer
-        states, next_states, actions, rewards, dones, indices, weights = memory.sample(32)
-        
-        # Get current Q-value distribution
-        current_q_dist = self.q_network(states)  # Shape: [batch_size, n_actions, ATOMS]
-        
-        # Reshape actions for gathering
-        actions = actions.unsqueeze(-1).unsqueeze(-1)  # Shape: [batch_size, 1, 1]
-        actions = actions.expand(-1, -1, ATOMS)        # Shape: [batch_size, 1, ATOMS]
-        current_q_dist = current_q_dist.gather(1, actions)  # Shape: [batch_size, 1, ATOMS]
-        
-        # Get next Q-value distribution
+    def act(self, state):
+        # New method, matching the provided Agent class
         with torch.no_grad():
-            next_q_dist = self.target_network(next_states)  # Shape: [batch_size, n_actions, ATOMS]
-            
-            # Select best actions based on expected value
-            expected_values = (next_q_dist * SUPPORT.unsqueeze(0).unsqueeze(0)).sum(2)
-            next_actions = expected_values.max(1)[1]  # Shape: [batch_size]
-            
-            # Reshape next_actions for gathering
-            next_actions = next_actions.unsqueeze(-1).unsqueeze(-1)  # Shape: [batch_size, 1, 1]
-            next_actions = next_actions.expand(-1, -1, ATOMS)        # Shape: [batch_size, 1, ATOMS]
-            next_q_dist = next_q_dist.gather(1, next_actions)        # Shape: [batch_size, 1, ATOMS]
-            
-            # Compute projected distribution
-            projected_dist = self._project_dist(next_q_dist.squeeze(1), rewards, dones, gamma)
-        
-        # Compute KL divergence loss
-        loss = -(projected_dist * torch.log(current_q_dist.squeeze(1) + 1e-8)).sum(1)
-        
-        # Apply importance sampling weights
-        weights = torch.FloatTensor(weights).to(device)
-        weighted_loss = (loss * weights).mean()
-        
-        # Optimize the model
-        self.optimizer.zero_grad()
-        weighted_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 10)
-        self.optimizer.step()
-        
-        # Update priorities in replay buffer
-        priorities = loss.detach().cpu().numpy()
-        memory.update_priorities(indices, priorities)
-        
-        # Reset noise for both networks
-        self.q_network.reset_noise()
-        self.target_network.reset_noise()
+            return (self.online_net(state.unsqueeze(0)) * self.support).sum(2).argmax(1).item()
 
-    def _project_dist(self, dist, rewards, dones, gamma):
-        batch_size = rewards.shape[0]
-        
-        # Project next state distribution using Bellman update
-        rewards = rewards.unsqueeze(1)  # [batch_size, 1]
-        dones = dones.unsqueeze(1)     # [batch_size, 1]
-        
-        # Compute projected values
-        support = SUPPORT.unsqueeze(0)  # [1, ATOMS]
-        delta_z = float(V_MAX - V_MIN) / (ATOMS - 1)
-        projected_support = rewards + (1 - dones) * gamma * support
-        
-        # Clamp projected values to support range
-        projected_support = projected_support.clamp(V_MIN, V_MAX)
-        
-        # Compute projection
-        b = (projected_support - V_MIN) / delta_z
-        lower = b.floor().long()
-        upper = b.ceil().long()
-        
-        projected_dist = torch.zeros_like(dist)
-        
-        # Handle corner cases
-        upper_bound_mask = upper < ATOMS
-        lower_bound_mask = lower >= 0
-        
-        # Distribute probability
-        for i in range(batch_size):
-            for j in range(ATOMS):
-                if upper_bound_mask[i, j] and lower_bound_mask[i, j]:
-                    projected_dist[i, lower[i, j]] += dist[i, j] * (upper[i, j] - b[i, j])
-                    projected_dist[i, upper[i, j]] += dist[i, j] * (b[i, j] - lower[i, j])
-        
-        return projected_dist
-    
-    def update_target_network(self):
-        tau = 0.005  # Soft update parameter
-        for target_param, policy_param in zip(self.target_network.parameters(), self.q_network.parameters()):
-            target_param.data.copy_(tau * policy_param.data + (1.0 - tau) * target_param.data)
+    def act_e_greedy(self, state, epsilon=0.001):
+        # New method, matching the provided Agent class
+        return np.random.randint(0, self.online_net.output_dim) if np.random.random() < epsilon else self.act(state)
 
     def save_model(self, filename):
         # Save the model locally
@@ -302,62 +130,6 @@ class PacmanAgent:
         agent.target_network.load_state_dict(state_dict)
         return agent
 
-class ProportionalPrioritizedReplayBuffer:
-    def __init__(self, capacity, alpha=0.6):
-        self.capacity = capacity
-        self.alpha = alpha
-        self.buffer = []
-        self.pos = 0
-        self.priorities = np.zeros((capacity,), dtype=np.float32)
-
-    def cache(self, state, next_state, action, reward, done):
-        max_prio = self.priorities.max() if self.buffer else 1.0
-
-        if len(self.buffer) < self.capacity:
-            self.buffer.append((state, next_state, action, reward, done))
-        else:
-            self.buffer[self.pos] = (state, next_state, action, reward, done)
-
-        self.priorities[self.pos] = max_prio
-        self.pos = (self.pos + 1) % self.capacity
-
-    def sample(self, batch_size, beta=0.4):
-        if len(self.buffer) == self.capacity:
-            prios = self.priorities
-        else:
-            prios = self.priorities[:self.pos]
-
-        probs = prios ** self.alpha
-        probs_sum = probs.sum()
-
-        # Handle NaN in probs by setting them to a uniform distribution
-        if np.isnan(probs_sum) or probs_sum == 0:
-            probs = np.ones_like(probs) / len(probs)
-        else:
-            probs /= probs_sum
-
-        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
-        samples = [self.buffer[idx] for idx in indices]
-
-        total = len(self.buffer)
-        weights = (total * probs[indices]) ** (-beta)
-        weights /= weights.max()
-        weights = np.array(weights, dtype=np.float32)
-
-        batch = list(zip(*samples))
-
-        states = torch.tensor(np.array(batch[0]), dtype=torch.float32).to(device)
-        next_states = torch.tensor(np.array(batch[1]), dtype=torch.float32).to(device)
-        actions = torch.tensor(batch[2], dtype=torch.int64).to(device)
-        rewards = torch.tensor(batch[3], dtype=torch.float32).to(device)
-        dones = torch.tensor(batch[4], dtype=torch.float32).to(device)
-        weights = torch.tensor(weights, dtype=torch.float32).to(device)
-
-        return states, next_states, actions, rewards, dones, indices, weights
-
-    def update_priorities(self, batch_indices, batch_priorities):
-        for idx, prio in zip(batch_indices, batch_priorities):
-            self.priorities[idx] = prio
 
 import logging
 from typing import Any, List
@@ -492,10 +264,10 @@ class PacmanTrainer:
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(screen.shape, n_actions)
-        self.memory = ProportionalPrioritizedReplayBuffer(100000)  # Use the new prioritized replay buffer
+        self.memory = ReplayBuffer(100000)
 
         frames_buffer, actions_buffer = [], []
-        max_batch_size = 500 * 1024 * 1024  # 400 MB
+        max_batch_size = 500 * 1024 * 1024  # 500 MB
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
@@ -508,54 +280,109 @@ class PacmanTrainer:
                 current_frame = self.env.render(mode='rgb_array')
                 self.env.render(mode='human')
 
-                action = self.agent.select_action(state, epsilon, n_actions)
+                # Select action using epsilon-greedy policy
+                if random.random() < epsilon:
+                    action = random.randrange(n_actions)
+                else:
+                    with torch.no_grad():
+                        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
+                        # Use categorical distribution to select action
+                        q_dist = self.agent.online_net(state_tensor)
+                        q_values = (q_dist * self.agent.support).sum(2)
+                        action = q_values.argmax(1).item()
+
                 next_state, reward, done, _ = self.env.step(action)
                 reward = max(-1.0, min(reward, 1.0))
                 ep_reward += reward
-                
+
                 if self.enable_rmq or self.save_locally:
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
 
+                # Store transition in memory
                 self.memory.cache(state, next_state, action, reward, done)
 
-                state = next_state if not done else None
+                # Move to next state
+                state = next_state
 
-                self.agent.optimize_model(self.memory, gamma=0.99, n_step=3)
+                # Perform optimization step if enough samples are available
+                if len(self.memory.buffer) >= 1000:
+                    # Sample transitions
+                    states, next_states, actions, rewards, dones, indices, weights = self.memory.sample(32)
+
+                    # Calculate current state probabilities
+                    log_ps = self.agent.online_net(states, log=True)
+                    log_ps_a = log_ps[range(32), actions]
+
+                    with torch.no_grad():
+                        # Calculate next state probabilities
+                        pns = self.agent.online_net(next_states)
+                        dns = self.agent.support.expand_as(pns) * pns
+                        argmax_indices_ns = dns.sum(2).argmax(1)
+                        
+                        # Reset noise and get target probabilities
+                        self.agent.target_net.reset_noise()
+                        pns = self.agent.target_net(next_states)
+                        pns_a = pns[range(32), argmax_indices_ns]
+
+                        # Compute Tz (Bellman operator)
+                        Tz = rewards.unsqueeze(1) + (1 - dones.unsqueeze(1)) * 0.99 * self.agent.support.unsqueeze(0)
+                        Tz = Tz.clamp(min=self.agent.Vmin, max=self.agent.Vmax)
+
+                        # Compute projection
+                        b = (Tz - self.agent.Vmin) / self.agent.delta_z
+                        l, u = b.floor().long(), b.ceil().long()
+                        l[(u > 0) * (l == u)] -= 1
+                        u[(l < (self.agent.atoms - 1)) * (l == u)] += 1
+
+                        # Distribute probability
+                        m = states.new_zeros(32, self.agent.atoms)
+                        offset = torch.linspace(0, ((32 - 1) * self.agent.atoms), 32).unsqueeze(1).expand(32, self.agent.atoms).to(actions)
+                        m.view(-1).index_add_(0, (l + offset).view(-1), (pns_a * (u.float() - b)).view(-1))
+                        m.view(-1).index_add_(0, (u + offset).view(-1), (pns_a * (b - l.float())).view(-1))
+
+                    # Cross-entropy loss (minimizes DKL(m||p))
+                    loss = -torch.sum(m * log_ps_a, 1)
+                    
+                    # Apply importance sampling weights
+                    weighted_loss = (loss * weights).mean()
+
+                    # Optimize the model
+                    self.agent.optimizer.zero_grad()
+                    weighted_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.agent.online_net.parameters(), 10)
+                    self.agent.optimizer.step()
+
+                    # Update priorities in memory
+                    self.memory.update_priorities(indices, loss.detach().cpu().numpy())
+
+                    # Reset noise for both networks
+                    self.agent.online_net.reset_noise()
+                    self.agent.target_net.reset_noise()
+
                 if done:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
                         self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
-                    logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward} and {pellets_left} pellets left.")
-                    
-                    # Log the reward to wandb
+                    logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with reward: {ep_reward} and {pellets_left} pellets left.")
                     wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": pellets_left})
-                    
                     break
 
-                # Check if the batch size limit is reached
-            if self.enable_rmq:
-                buffer_size = self._get_buffer_size(frames_buffer, actions_buffer)
-                logging.info(f"Buffer size: {buffer_size} bytes")
-                if buffer_size >= max_batch_size:
-                    logging.warning("BUFFER SIZE EXCEEDING 500MB")
-                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
-                frames_buffer, actions_buffer = [], []
-                # batch_id += 1
+                # Handle data saving and buffer management
+                if self.enable_rmq:
+                    buffer_size = self._get_buffer_size(frames_buffer, actions_buffer)
+                    if buffer_size >= max_batch_size:
+                        self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
+                        frames_buffer, actions_buffer = [], []
 
-            # Send remaining data at the end of the episode
-            if frames_buffer and self.enable_rmq:
-                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
-                frames_buffer, actions_buffer = [], []
-
-            if i_episode > 2: 
+            # Update target network periodically
+            if i_episode > 2:
                 if i_episode % 10 == 0:
-                    self.agent.update_target_network()
+                    self.agent.update_target_net()
                     logging.info(f"Updated target network at episode {i_episode}")
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                         logging.info(torch.cuda.memory_summary())
-                    torch.autograd.set_detect_anomaly(True)
 
                 if i_episode % 1000 == 0:
                     self.agent.save_model('pacman.pth')
