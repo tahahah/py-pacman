@@ -206,12 +206,14 @@ class PacmanAgent:
     def optimize_model(self, memory, gamma=0.99):
         if self.steps_done < 1e3:
             return
+            
         state, next_state, action, reward, done, indices, weights = memory.sample(32)
         
         state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
         
         with torch.no_grad():
-            next_state_values = self.target_net(next_state).max(1)[0]
+            next_actions = self.policy_net(next_state).max(1)[1]
+            next_state_values = self.target_net(next_state).gather(1, next_actions.unsqueeze(1)).squeeze(1)
             next_state_values[done] = 0.0
             expected_state_action_values = (next_state_values * gamma) + reward
             
@@ -232,7 +234,7 @@ class PacmanAgent:
         
         # Update priorities in buffer
         memory.update_priorities(indices, td_errors.squeeze().cpu().numpy())
-
+        
     def update_target_network(self):
         # Soft update of target network
         tau = 0.005
@@ -246,7 +248,12 @@ class PacmanAgent:
         # Save the model to Hugging Face
         huggingface_hub.login(token=HF_TOKEN)
 
-        huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=f"Tahahah/{self.model_name}", repo_type="model")
+        repo_id = f"Tahahah/{self.model_name}"
+        try:
+            huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=repo_id, repo_type="model")
+        except huggingface_hub.utils.RepositoryNotFoundError:
+            huggingface_hub.create_repo(repo_id, repo_type="model")
+            huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=repo_id, repo_type="model")
 
         logging.info(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {self.model_name}")
 
