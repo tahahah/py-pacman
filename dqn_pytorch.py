@@ -124,20 +124,12 @@ class PacmanAgent:
                 return q_values.argmax(1).item()
 
     def optimize_model(self, memory, n_steps=3):
-        if memory.capacity < self.batch_size:
+        if len(memory.buffer) < self.batch_size:
             return
 
-        transitions = memory.sample(self.batch_size)
-        batch = memory.transition(*transitions)
-
-        states, actions, rewards, next_states, dones = batch
-
-        states = torch.FloatTensor(states).to(device)
-        actions = torch.LongTensor(actions).unsqueeze(1).to(device)
-        rewards = torch.FloatTensor(rewards).to(device)
-        next_states = torch.FloatTensor(next_states).to(device)
-        dones = torch.FloatTensor(dones).to(device)
-
+        # Sample from prioritized replay buffer
+        states, next_states, actions, rewards, dones, indices, weights = memory.sample(self.batch_size)
+        
         # Current Q Distribution
         current_dist = self.q_network(states)
         current_dist = current_dist.gather(1, actions.unsqueeze(-1).expand(-1, -1, self.atoms)).squeeze(1)
@@ -156,14 +148,22 @@ class PacmanAgent:
             u = b.ceil().long()
 
             m = torch.zeros(self.batch_size, self.atoms).to(device)
-            offset = torch.linspace(0, (self.batch_size - 1) * self.atoms, self.batch_size).long().unsqueeze(1).expand(self.batch_size, self.atoms)
+            offset = torch.linspace(0, (self.batch_size - 1) * self.atoms, self.batch_size).long().unsqueeze(1).expand(self.batch_size, self.atoms).to(device)
             l = l.view(-1)
             u = u.view(-1)
             m.view(-1).index_add_(0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1))
             m.view(-1).index_add_(0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1))
 
-        # Compute loss
-        loss = -(m * torch.log(current_dist + 1e-8)).sum(1).mean()
+        # Compute loss with importance sampling weights
+        loss = -(weights * (m * torch.log(current_dist + 1e-8)).sum(1)).mean()
+
+        # Compute new priorities
+        with torch.no_grad():
+            td_error = abs(current_dist.sum(1) - (next_dist * self.support).sum(1))
+        new_priorities = td_error.detach().cpu().numpy()
+
+        # Update priorities in the replay buffer
+        memory.update_priorities(indices, new_priorities)
 
         # Optimize the model
         self.optimizer.zero_grad()
@@ -456,8 +456,6 @@ class PacmanTrainer:
 
             if i_episode > 2: 
                 if i_episode % 10 == 0:
-                    self.agent.update_target_network()
-                    logging.info(f"Updated target network at episode {i_episode}")
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                         logging.info(torch.cuda.memory_summary())
