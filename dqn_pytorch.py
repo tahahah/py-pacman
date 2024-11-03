@@ -329,7 +329,7 @@ class PacmanTrainer:
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(screen.shape, n_actions)
-        self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
+        self.memory = ReplayBuffer(100000)  # BATCH_SIZE = 32
 
         frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
@@ -411,9 +411,9 @@ class PacmanTrainer:
         return buffer_size
     def _get_epsilon(self, frame_idx):
         # Start with a lower initial epsilon and decay faster
-        initial_epsilon = 0.5  # Lower initial exploration rate
-        min_epsilon = 0.1      # Minimum exploration rate
-        decay_rate = 5e6       # Faster decay rate
+        initial_epsilon = 1  # Lower initial exploration rate
+        min_epsilon = 0.05      # Minimum exploration rate
+        decay_rate = 5e4       # Faster decay rate
 
         return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
     
