@@ -146,6 +146,7 @@ class NoisyLinear(nn.Module):
     def _scale_noise(self, size):
         x = torch.randn(size)
         return x.sign().mul_(x.abs().sqrt_())
+    
 class PacmanAgent:
     def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbowDQN"):
         self.q_network = RainbowDQN(input_dim, output_dim).to(device)
@@ -194,19 +195,20 @@ class PacmanAgent:
         
         # Get current Q-value distribution
         current_q_dist = self.q_network(states)
-        current_q_dist = current_q_dist.gather(1, actions.unsqueeze(-1).expand(-1, -1, ATOMS))
+        actions = actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, ATOMS)
+        current_q_dist = current_q_dist.gather(1, actions).squeeze(1)
         
         # Get next Q-value distribution
         with torch.no_grad():
             next_q_dist = self.target_network(next_states)
             next_actions = next_q_dist.sum(dim=2).max(1)[1].unsqueeze(1)
-            next_q_dist = next_q_dist.gather(1, next_actions.unsqueeze(-1).expand(-1, -1, ATOMS))
+            next_q_dist = next_q_dist.gather(1, next_actions.unsqueeze(-1).expand(-1, -1, ATOMS)).squeeze(1)
             
             # Compute projected distribution
             projected_dist = self._project_dist(next_q_dist, rewards, dones, gamma)
         
         # Compute KL divergence loss
-        loss = -(projected_dist * torch.log(current_q_dist + 1e-8)).sum(2).mean(1)
+        loss = -(projected_dist * torch.log(current_q_dist + 1e-8)).sum(1)
         
         # Apply importance sampling weights
         weighted_loss = (loss * torch.FloatTensor(weights).to(device)).mean()
