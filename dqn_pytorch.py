@@ -124,7 +124,7 @@ class PacmanAgent:
                 return q_values.argmax(1).item()
 
     def optimize_model(self, memory, n_steps=3):
-        if len(memory) < self.batch_size:
+        if memory.capacity < self.batch_size:
             return
 
         transitions = memory.sample(self.batch_size)
