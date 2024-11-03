@@ -55,16 +55,16 @@ V_MAX = 10  # adjusted for Pacman environment
 SUPPORT = torch.linspace(V_MIN, V_MAX, ATOMS).to(device)
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, args, model_name="pacman_policy_net_gamengen_1_rainbowDQN"):
-        self.atoms = args.atoms
-        self.Vmin = args.V_min
-        self.Vmax = args.V_max
-        self.support = torch.linspace(args.V_min, args.V_max, self.atoms).to(device=device)
-        self.delta_z = (args.V_max - args.V_min) / (self.atoms - 1)
-        self.batch_size = args.batch_size
-        self.n = args.multi_step
-        self.discount = args.discount
-        self.norm_clip = args.norm_clip
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbowDQN"):
+        self.atoms = 51  # Default number of atoms for C51
+        self.Vmin = -10  # Default minimum value
+        self.Vmax = 10   # Default maximum value
+        self.support = torch.linspace(self.Vmin, self.Vmax, self.atoms).to(device=device)
+        self.delta_z = (self.Vmax - self.Vmin) / (self.atoms - 1)
+        self.batch_size = 32  # Default batch size
+        self.n = 3  # Default number of steps for multi-step learning
+        self.discount = 0.99  # Default discount factor
+        self.norm_clip = 10  # Default gradient norm clipping
 
         self.online_net = DQN(input_dim, output_dim).to(device=device)
         self.target_net = DQN(input_dim, output_dim).to(device=device)
