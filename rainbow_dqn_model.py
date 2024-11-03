@@ -47,24 +47,24 @@ class NoisyLinear(nn.Module):
 
 
 class DQN(nn.Module):
-  def __init__(self, args, action_space):
+  def __init__(self, input_dim, output_dim, architecture='canonical', atoms=51, hidden_size=512, noisy_std=0.1):
     super(DQN, self).__init__()
-    self.atoms = args.atoms
-    self.action_space = action_space
+    self.atoms = atoms
+    self.action_space = output_dim
 
-    if args.architecture == 'canonical':
-      self.convs = nn.Sequential(nn.Conv2d(args.history_length, 32, 8, stride=4, padding=0), nn.ReLU(),
+    if architecture == 'canonical':
+      self.convs = nn.Sequential(nn.Conv2d(input_dim, 32, 8, stride=4, padding=0), nn.ReLU(),
                                  nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
                                  nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU())
       self.conv_output_size = 3136
-    elif args.architecture == 'data-efficient':
-      self.convs = nn.Sequential(nn.Conv2d(args.history_length, 32, 5, stride=5, padding=0), nn.ReLU(),
+    else: # data-efficient architecture
+      self.convs = nn.Sequential(nn.Conv2d(input_dim, 32, 5, stride=5, padding=0), nn.ReLU(),
                                  nn.Conv2d(32, 64, 5, stride=5, padding=0), nn.ReLU())
       self.conv_output_size = 576
-    self.fc_h_v = NoisyLinear(self.conv_output_size, args.hidden_size, std_init=args.noisy_std)
-    self.fc_h_a = NoisyLinear(self.conv_output_size, args.hidden_size, std_init=args.noisy_std)
-    self.fc_z_v = NoisyLinear(args.hidden_size, self.atoms, std_init=args.noisy_std)
-    self.fc_z_a = NoisyLinear(args.hidden_size, action_space * self.atoms, std_init=args.noisy_std)
+    self.fc_h_v = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
+    self.fc_h_a = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
+    self.fc_z_v = NoisyLinear(hidden_size, self.atoms, std_init=noisy_std)
+    self.fc_z_a = NoisyLinear(hidden_size, output_dim * self.atoms, std_init=noisy_std)
 
   def forward(self, x, log=False):
     x = self.convs(x)
