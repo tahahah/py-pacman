@@ -112,7 +112,7 @@ class PacmanAgent:
             with torch.no_grad():
                 # Convert state to tensor if it's not already
                 if not isinstance(state, torch.Tensor):
-                    state = torch.FloatTensor(state)
+                    state = torch.Tensor(state)
                 
                 # Ensure state has shape (batch_size=1, channels=4, height=84, width=84)
                 if state.dim() == 3:  # (4, 84, 84)
