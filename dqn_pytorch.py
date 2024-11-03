@@ -194,24 +194,35 @@ class PacmanAgent:
         states, next_states, actions, rewards, dones, indices, weights = memory.sample(32)
         
         # Get current Q-value distribution
-        current_q_dist = self.q_network(states)
-        actions = actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, ATOMS)
-        current_q_dist = current_q_dist.gather(1, actions).squeeze(1)
+        current_q_dist = self.q_network(states)  # Shape: [batch_size, n_actions, ATOMS]
+        
+        # Reshape actions for gathering
+        actions = actions.unsqueeze(-1).unsqueeze(-1)  # Shape: [batch_size, 1, 1]
+        actions = actions.expand(-1, -1, ATOMS)        # Shape: [batch_size, 1, ATOMS]
+        current_q_dist = current_q_dist.gather(1, actions)  # Shape: [batch_size, 1, ATOMS]
         
         # Get next Q-value distribution
         with torch.no_grad():
-            next_q_dist = self.target_network(next_states)
-            next_actions = next_q_dist.sum(dim=2).max(1)[1].unsqueeze(1)
-            next_q_dist = next_q_dist.gather(1, next_actions.unsqueeze(-1).expand(-1, -1, ATOMS)).squeeze(1)
+            next_q_dist = self.target_network(next_states)  # Shape: [batch_size, n_actions, ATOMS]
+            
+            # Select best actions based on expected value
+            expected_values = (next_q_dist * SUPPORT.unsqueeze(0).unsqueeze(0)).sum(2)
+            next_actions = expected_values.max(1)[1]  # Shape: [batch_size]
+            
+            # Reshape next_actions for gathering
+            next_actions = next_actions.unsqueeze(-1).unsqueeze(-1)  # Shape: [batch_size, 1, 1]
+            next_actions = next_actions.expand(-1, -1, ATOMS)        # Shape: [batch_size, 1, ATOMS]
+            next_q_dist = next_q_dist.gather(1, next_actions)        # Shape: [batch_size, 1, ATOMS]
             
             # Compute projected distribution
-            projected_dist = self._project_dist(next_q_dist, rewards, dones, gamma)
+            projected_dist = self._project_dist(next_q_dist.squeeze(1), rewards, dones, gamma)
         
         # Compute KL divergence loss
-        loss = -(projected_dist * torch.log(current_q_dist + 1e-8)).sum(1)
+        loss = -(projected_dist * torch.log(current_q_dist.squeeze(1) + 1e-8)).sum(1)
         
         # Apply importance sampling weights
-        weighted_loss = (loss * torch.FloatTensor(weights).to(device)).mean()
+        weights = torch.FloatTensor(weights).to(device)
+        weighted_loss = (loss * weights).mean()
         
         # Optimize the model
         self.optimizer.zero_grad()
@@ -227,26 +238,40 @@ class PacmanAgent:
         self.q_network.reset_noise()
         self.target_network.reset_noise()
 
-    def _project_dist(self, target_values, returns, done, gamma):
-        # Compute projected distribution (C51)
-        delta_z = (V_MAX - V_MIN) / (ATOMS - 1)
-        support = torch.linspace(V_MIN, V_MAX, ATOMS).to(device)
-
-        target_dist = torch.zeros(target_values.shape[0], ATOMS).to(device)
-        for i in range(target_values.shape[0]):
-            if done[i]:
-                target_dist[i] = torch.nn.functional.one_hot(torch.argmax(target_values[i]), ATOMS).float()
-            else:
-                tz = returns[i] + gamma * support
-                tz.clamp_(V_MIN, V_MAX)
-                b = (tz - V_MIN) / delta_z
-                l = b.floor().long()
-                u = b.ceil().long()
-                d_m_l = (b - l).unsqueeze(1).expand(-1, ATOMS)
-                d_m_u = (u - b).unsqueeze(1).expand(-1, ATOMS)
-                target_dist[i] = target_values[i] * (d_m_l * (u == l).float() + d_m_u * (u != l).float())
-
-        return target_dist
+    def _project_dist(self, dist, rewards, dones, gamma):
+        batch_size = rewards.shape[0]
+        
+        # Project next state distribution using Bellman update
+        rewards = rewards.unsqueeze(1)  # [batch_size, 1]
+        dones = dones.unsqueeze(1)     # [batch_size, 1]
+        
+        # Compute projected values
+        support = SUPPORT.unsqueeze(0)  # [1, ATOMS]
+        delta_z = float(V_MAX - V_MIN) / (ATOMS - 1)
+        projected_support = rewards + (1 - dones) * gamma * support
+        
+        # Clamp projected values to support range
+        projected_support = projected_support.clamp(V_MIN, V_MAX)
+        
+        # Compute projection
+        b = (projected_support - V_MIN) / delta_z
+        lower = b.floor().long()
+        upper = b.ceil().long()
+        
+        projected_dist = torch.zeros_like(dist)
+        
+        # Handle corner cases
+        upper_bound_mask = upper < ATOMS
+        lower_bound_mask = lower >= 0
+        
+        # Distribute probability
+        for i in range(batch_size):
+            for j in range(ATOMS):
+                if upper_bound_mask[i, j] and lower_bound_mask[i, j]:
+                    projected_dist[i, lower[i, j]] += dist[i, j] * (upper[i, j] - b[i, j])
+                    projected_dist[i, upper[i, j]] += dist[i, j] * (b[i, j] - lower[i, j])
+        
+        return projected_dist
     
     def update_target_network(self):
         tau = 0.005  # Soft update parameter
