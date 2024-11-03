@@ -67,24 +67,131 @@ class DQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         return self.net(x)
 
 
-class PacmanAgent:
+class DuelingDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     def __init__(self, input_dim, output_dim):
-        self.policy_net = DQN(input_dim, output_dim).to(device)
-        self.target_net = DQN(input_dim, output_dim).to(device)
+        super(DuelingDQN, self).__init__()
+        c, h, w = input_dim
+        
+        # Feature extraction layers
+        self.features = nn.Sequential(
+            nn.Conv2d(in_channels=c, out_channels=32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+        
+        # Value stream
+        self.value_stream = nn.Sequential(
+            nn.Linear(3136, 512),
+            nn.ReLU(),
+            nn.Linear(512, 1)
+        )
+        
+        # Advantage stream
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(3136, 512),
+            nn.ReLU(),
+            nn.Linear(512, output_dim)
+        )
+
+    def forward(self, x):
+        features = self.features(x)
+        values = self.value_stream(features)
+        advantages = self.advantage_stream(features)
+        return values + (advantages - advantages.mean(dim=1, keepdim=True))
+
+class PrioritizedReplayBuffer:
+    def __init__(self, size, alpha=0.6):
+        self.size = size
+        self.alpha = alpha
+        self.beta = 0.4
+        self.beta_increment = 0.001
+        
+        self.curr_size = 0
+        self.pos = 0
+        
+        self.states = np.zeros((size, 4, 84, 84), dtype=np.float32)
+        self.next_states = np.zeros((size, 4, 84, 84), dtype=np.float32)
+        self.actions = np.zeros(size, dtype=np.int64)
+        self.rewards = np.zeros(size, dtype=np.float32)
+        self.dones = np.zeros(size, dtype=np.bool)
+        
+        tree_capacity = 1
+        while tree_capacity < size:
+            tree_capacity *= 2
+            
+        self.sum_tree = SumSegmentTree(tree_capacity)
+        self.min_tree = MinSegmentTree(tree_capacity)
+        self.max_priority = 1.0
+
+    def push(self, state, next_state, action, reward, done):
+        self.states[self.pos] = state
+        self.next_states[self.pos] = next_state
+        self.actions[self.pos] = action
+        self.rewards[self.pos] = reward
+        self.dones[self.pos] = done
+        
+        self.sum_tree[self.pos] = self.max_priority ** self.alpha
+        self.min_tree[self.pos] = self.max_priority ** self.alpha
+        
+        self.pos = (self.pos + 1) % self.size
+        self.curr_size = min(self.curr_size + 1, self.size)
+
+    def sample(self, batch_size):
+        indices = []
+        weights = np.zeros(batch_size, dtype=np.float32)
+        total = self.sum_tree.sum(0, self.curr_size)
+        
+        min_prob = self.min_tree.min() / total
+        max_weight = (min_prob * self.curr_size) ** (-self.beta)
+        
+        for i in range(batch_size):
+            mass = random.random() * total
+            idx = self.sum_tree.find_prefixsum_idx(mass)
+            indices.append(idx)
+            
+            prob = self.sum_tree[idx] / total
+            weights[i] = (prob * self.curr_size) ** (-self.beta) / max_weight
+            
+        self.beta = min(1.0, self.beta + self.beta_increment)
+        
+        states = torch.FloatTensor(self.states[indices]).to(device)
+        next_states = torch.FloatTensor(self.next_states[indices]).to(device)
+        actions = torch.LongTensor(self.actions[indices]).to(device)
+        rewards = torch.FloatTensor(self.rewards[indices]).to(device)
+        dones = torch.BoolTensor(self.dones[indices]).to(device)
+        weights = torch.FloatTensor(weights).to(device)
+        
+        return states, next_states, actions, rewards, dones, indices, weights
+
+    def update_priorities(self, indices, priorities):
+        for idx, priority in zip(indices, priorities):
+            priority = max(priority, 1e-6)
+            self.max_priority = max(self.max_priority, priority)
+            self.sum_tree[idx] = priority ** self.alpha
+            self.min_tree[idx] = priority ** self.alpha
+
+class PacmanAgent:
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_duelingDQN"):
+        self.policy_net = DuelingDQN(input_dim, output_dim).to(device)
+        self.target_net = DuelingDQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
-        self.optimizer = optim.RMSprop(self.policy_net.parameters())
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.0001, eps=1.5e-4)
         self.steps_done = 0
 
         # Try to load the model from Hugging Face if it exists
-        model_name = "pacman_policy_net_gamengen_1"
+        self.model_name = model_name
         try:
             huggingface_hub.login(token=HF_TOKEN)
-            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{model_name}", filename="checkpoints/pacman.pth", repo_type="model")
+            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
             state_dict = torch.load(model_path, map_location=device)
             self.policy_net.load_state_dict(state_dict)
             self.target_net.load_state_dict(state_dict)
-            logging.info(f"Model loaded from Hugging Face: {model_name}")
+            logging.info(f"Model loaded from Hugging Face: {self.model_name}")
         except Exception as e:
             logging.warning(f"Could not load model from Hugging Face: {e}")
 
@@ -96,50 +203,52 @@ class PacmanAgent:
                 state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
                 return self.policy_net(state).max(1)[1].item()
 
-    def optimize_model(self, memory, gamma):
+    def optimize_model(self, memory, gamma=0.99):
         if self.steps_done < 1e3:
             return
-        state, next_state, action, reward,
-        done = memory.sample()
+        state, next_state, action, reward, done, indices, weights = memory.sample(32)
         
-        state = state.to(device)
-        next_state = next_state.to(device)
-        action = action.to(device)
-        reward = reward.to(device)
-        done = done.to(device)
         state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
-        next_state_values = torch.zeros(memory.batch_size, device=device)
         
         with torch.no_grad():
-            # Detaching the tensor from the computation graph
-            next_state_values[~done] = self.target_net(next_state).max(1)[0].detach() 
+            next_state_values = self.target_net(next_state).max(1)[0]
+            next_state_values[done] = 0.0
+            expected_state_action_values = (next_state_values * gamma) + reward
+            
+        # Calculate TD errors for priority updating
+        td_errors = torch.abs(state_action_values - expected_state_action_values.unsqueeze(1)).detach()
         
-        expected_state_action_values = (next_state_values * gamma) + reward
-        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
+        # Calculate weighted loss
+        loss = (weights.unsqueeze(1) * F.smooth_l1_loss(state_action_values, 
+                expected_state_action_values.unsqueeze(1), reduction='none')).mean()
+        
         self.optimizer.zero_grad()
         loss.backward()
-
-        for param in self.policy_net.parameters():
-            param.grad.data.clamp_(-1, 1)
-
+        
+        # Clip gradients
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
+        
         self.optimizer.step()
-        # Deleting tensors after optimization
-        del state, next_state, action, reward, done 
+        
+        # Update priorities in buffer
+        memory.update_priorities(indices, td_errors.squeeze().cpu().numpy())
 
     def update_target_network(self):
-        self.target_net.load_state_dict(self.policy_net.state_dict())
+        # Soft update of target network
+        tau = 0.005
+        for target_param, policy_param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+            target_param.data.copy_(tau * policy_param.data + (1.0 - tau) * target_param.data)
 
     def save_model(self, filename):
         # Save the model locally
         torch.save(self.policy_net.state_dict(), filename)
         
         # Save the model to Hugging Face
-        model_name = "pacman_policy_net_gamengen_1"
         huggingface_hub.login(token=HF_TOKEN)
 
-        huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=f"Tahahah/{model_name}", repo_type="model")
+        huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=f"Tahahah/{self.model_name}", repo_type="model")
 
-        logging.info(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {model_name}")
+        logging.info(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {self.model_name}")
 
     @classmethod
     def load_model(cls, input_dim, output_dim, filename):
