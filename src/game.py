@@ -74,6 +74,8 @@ class Game(object):
         self.path_finder = PathFinder(self.maze.matrix_from_lookup_table(PATH_FINDER_LOOKUP_TABLE))
         self.ghosts = [Ghost(i, GHOST_COLORS[i], self.path_finder) for i in range(0, self.maze.get_number_of_ghosts())]
 
+        self.consecutive_pellets = 0  # Add this line to initialize the counter
+
         if self.sounds_active:
             self.init_mixer()
             self.load_sounds()
@@ -390,7 +392,6 @@ class Game(object):
     def draw_ghost_value(self, value):
         self.draw_value = True
         self.value_to_draw = value
-
     def check_if_hit_something(self):
         for row in range(self.player.nearest_row - 1, self.player.nearest_row + 2):
             for col in range(self.player.nearest_col - 1, self.player.nearest_col + 2):
@@ -406,7 +407,8 @@ class Game(object):
                             self.snd_pellet[self.pellet_snd_num].play()
                         self.pellet_snd_num = 1 - self.pellet_snd_num
                         self.add_score(10)
-                        self.add_reward(1)
+                        self.consecutive_pellets += 1
+                        self.add_reward(1 + self.consecutive_pellets * 0.5)  # Increased reward for consecutive pellets
 
                         if self.maze.get_number_of_pellets() == 0:
                             self.set_mode(6)
@@ -439,6 +441,9 @@ class Game(object):
                                         self.player.y += TILE_SIZE
                                     else:
                                         self.player.y -= TILE_SIZE
+                else: 
+                    self.consecutive_pellets = 0  # Reset consecutive pellets counter
+
 
     def check_collision_with_ghosts(self):
         for ghost in self.ghosts:
