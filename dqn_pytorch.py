@@ -328,7 +328,13 @@ class ProportionalPrioritizedReplayBuffer:
             prios = self.priorities[:self.pos]
 
         probs = prios ** self.alpha
-        probs /= probs.sum()
+        probs_sum = probs.sum()
+
+        # Handle NaN in probs by setting them to a uniform distribution
+        if np.isnan(probs_sum) or probs_sum == 0:
+            probs = np.ones_like(probs) / len(probs)
+        else:
+            probs /= probs_sum
 
         indices = np.random.choice(len(self.buffer), batch_size, p=probs)
         samples = [self.buffer[idx] for idx in indices]
