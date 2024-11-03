@@ -89,11 +89,8 @@ class RainbowDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
     def forward(self, x):
         features = self.features(x)
-        logging.info(f"Features shape: {features.shape}")  # Debug print
         noisy1 = self.noisy_linear1(features)
-        logging.info(f"Noisy1 shape: {noisy1.shape}")  # Debug print
         noisy2 = self.noisy_linear2(noisy1)
-        logging.info(f"Noisy2 shape: {noisy2.shape}")  # Debug print
 
         values = self.value_stream(noisy2).view(-1, 1, ATOMS)
         advantages = self.advantage_stream(noisy2).view(-1, self.output_dim, ATOMS)
