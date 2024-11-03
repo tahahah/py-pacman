@@ -175,7 +175,14 @@ class PacmanAgent:
             return random.randrange(n_actions)
         else:
             with torch.no_grad():
-                state = torch.FloatTensor(state).unsqueeze(0).to(device)
+                # Check if state is already a tensor
+                if not isinstance(state, torch.Tensor):
+                    state = torch.FloatTensor(state.__array__()).to(device)
+                
+                # Ensure state has correct shape [batch_size, channels, height, width]
+                if len(state.shape) == 3:
+                    state = state.unsqueeze(0)
+                
                 dist = self.q_network(state)
                 # Calculate expected value for each action
                 q_values = (dist * SUPPORT.unsqueeze(0).unsqueeze(0)).sum(2)
