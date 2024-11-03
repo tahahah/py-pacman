@@ -105,11 +105,20 @@ class PacmanAgent:
             logging.warning(f"Could not load model from Hugging Face: {e}")
 
     def select_action(self, state, epsilon, n_actions):
+        logging.info(f"State shape: {state.shape if isinstance(state, torch.Tensor) else np.array(state).shape}")
         if random.random() < epsilon:
             return random.randrange(n_actions)
         else:
             with torch.no_grad():
-                state = torch.FloatTensor(state).unsqueeze(0).to(device)
+                # Convert state to tensor if it's not already
+                if not isinstance(state, torch.Tensor):
+                    state = torch.FloatTensor(state)
+                
+                # Ensure state has shape (batch_size=1, channels=4, height=84, width=84)
+                if state.dim() == 3:  # (4, 84, 84)
+                    state = state.unsqueeze(0)  # Add batch dimension
+                    
+                state = state.to(device)
                 dist = self.q_network(state)
                 q_values = (dist * self.support).sum(2)
                 return q_values.argmax(1).item()
