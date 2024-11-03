@@ -426,7 +426,7 @@ class PacmanTrainer:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
                         self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
-                    logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward} and {pellets_left}")
+                    logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward} and {pellets_left} pellets left.")
                     
                     # Log the reward to wandb
                     wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": pellets_left})
