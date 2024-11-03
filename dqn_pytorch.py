@@ -104,9 +104,9 @@ class PacmanAgent:
         except Exception as e:
             logging.warning(f"Could not load model from Hugging Face: {e}")
 
-    def select_action(self, state, epsilon):
+    def select_action(self, state, epsilon, n_actions):
         if random.random() < epsilon:
-            return random.randrange(self.action_space)
+            return random.randrange(n_actions)
         else:
             with torch.no_grad():
                 state = torch.FloatTensor(state).unsqueeze(0).to(device)
