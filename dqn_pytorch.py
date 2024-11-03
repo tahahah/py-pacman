@@ -46,32 +46,17 @@ Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'
 
 MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
-class DQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
+ATOMS = 51  # default for C51
+V_MIN = -10  # adjusted for Pacman environment
+V_MAX = 10  # adjusted for Pacman environment
+
+class RainbowDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     def __init__(self, input_dim, output_dim):
-        super(DQN, self).__init__()
+        super(RainbowDQN, self).__init__()
         c, h, w = input_dim
-        self.net = nn.Sequential(
-            nn.Conv2d(in_channels=c, out_channels=32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(3136, 512),
-            nn.ReLU(),
-            nn.Linear(512, output_dim)
-        )
+        self.input_dim = input_dim
+        self.output_dim = output_dim
 
-    def forward(self, x):
-        return self.net(x)
-
-
-class DuelingDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
-    def __init__(self, input_dim, output_dim):
-        super(DuelingDQN, self).__init__()
-        c, h, w = input_dim
-        
         # Feature extraction layers
         self.features = nn.Sequential(
             nn.Conv2d(in_channels=c, out_channels=32, kernel_size=8, stride=4),
@@ -83,35 +68,73 @@ class DuelingDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
             nn.Flatten()
         )
         
-        # Value stream
+        # Noisy Linear Layers
+        self.noisy_linear1 = NoisyLinear(3136, 512)
+        self.noisy_linear2 = NoisyLinear(512, 512)
+        
+        # Dueling Network
         self.value_stream = nn.Sequential(
-            nn.Linear(3136, 512),
+            nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(512, 1)
+            nn.Linear(512, ATOMS)
         )
         
-        # Advantage stream
         self.advantage_stream = nn.Sequential(
-            nn.Linear(3136, 512),
+            nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(512, output_dim)
+            nn.Linear(512, ATOMS * output_dim)
         )
 
     def forward(self, x):
         features = self.features(x)
-        values = self.value_stream(features)
-        advantages = self.advantage_stream(features)
-        return values + (advantages - advantages.mean(dim=1, keepdim=True))
+        noisy1 = self.noisy_linear1(features)
+        noisy2 = self.noisy_linear2(noisy1)
+        
+        values = self.value_stream(noisy2).view(-1, 1, ATOMS)
+        advantages = self.advantage_stream(noisy2).view(-1, self.output_dim, ATOMS)
+        
+        # Compute Q-values
+        q_values = values + (advantages - advantages.mean(dim=1, keepdim=True))
+        return q_values
 
+    def reset_noise(self):
+        self.noisy_linear1.reset_noise()
+        self.noisy_linear2.reset_noise()
+
+class NoisyLinear(nn.Module):
+    def __init__(self, in_features, out_features):
+        super(NoisyLinear, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.Tensor(out_features, in_features))
+        self.bias = nn.Parameter(torch.Tensor(out_features))
+        self.noisy_weight = nn.Parameter(torch.Tensor(out_features, in_features))
+        self.noisy_bias = nn.Parameter(torch.Tensor(out_features))
+        self.reset_noise()
+        self.register_parameter('weight', self.weight)
+        self.register_parameter('bias', self.bias)
+        self.register_parameter('noisy_weight', self.noisy_weight)
+        self.register_parameter('noisy_bias', self.noisy_bias)
+
+    def forward(self, x):
+        return F.linear(x, self.weight + self.noisy_weight, self.bias + self.noisy_bias)
+
+    def reset_noise(self):
+        eps_input = torch.randn(self.in_features)
+        eps_output = torch.randn(self.out_features)
+        
+        self.noisy_weight.data = torch.outer(eps_input, eps_output) * 0.4 / self.in_features
+        self.noisy_bias.data = eps_output * 0.4
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_duelingDQN"):
-        self.policy_net = DuelingDQN(input_dim, output_dim).to(device)
-        self.target_net = DuelingDQN(input_dim, output_dim).to(device)
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00004, eps=1.5e-4)
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbowDQN"):
+        self.q_network = RainbowDQN(input_dim, output_dim).to(device)
+        self.target_network = RainbowDQN(input_dim, output_dim).to(device)
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        self.target_network.eval()
+        self.optimizer = optim.Adam(self.q_network.parameters(), lr=0.00004, eps=1.5e-4)
         self.steps_done = 0
+
 
         # Try to load the model from Hugging Face if it exists
         self.model_name = model_name
@@ -133,38 +156,61 @@ class PacmanAgent:
                 state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
                 return self.policy_net(state).max(1)[1].item()
 
-    def optimize_model(self, memory, gamma=0.99):
+    def optimize_model(self, memory, gamma=0.99, n_step=3):
         if self.steps_done < 1e3:
             return
             
         state, next_state, action, reward, done, indices, weights = memory.sample(32)
         
-        state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
+        # Compute n-step returns
+        returns = []
+        for i in range(len(reward)):
+            if done[i]:
+                returns.append(reward[i])
+            else:
+                returns.append(reward[i] + (gamma ** n_step) * self.target_network(next_state[i]).max(dim=1)[0])
         
-        with torch.no_grad():
-            next_actions = self.policy_net(next_state).max(1)[1]
-            next_state_values = self.target_net(next_state).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            next_state_values[done] = 0.0
-            expected_state_action_values = (next_state_values * gamma) + reward
-            
-        # Calculate TD errors for priority updating
-        td_errors = torch.abs(state_action_values - expected_state_action_values.unsqueeze(1)).detach()
-        
-        # Calculate weighted loss
-        loss = (weights.unsqueeze(1) * F.smooth_l1_loss(state_action_values, 
-                expected_state_action_values.unsqueeze(1), reduction='none')).mean()
-        
-        self.optimizer.zero_grad()
-        loss.backward()
-        
-        # Clip gradients
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
-        
-        self.optimizer.step()
+        # Compute distributional loss (C51)
+        q_values = self.q_network(state).gather(1, action.unsqueeze(1).expand(-1, -1, ATOMS))
+        target_values = self.target_network(next_state).detach()
+        target_dist = self._project_dist(target_values, returns, done, gamma)
+        dist_loss = -(target_dist * torch.log(q_values)).sum(dim=2).mean()
         
         # Update priorities in buffer
-        memory.update_priorities(indices, td_errors.squeeze().cpu().numpy())
+        td_errors = dist_loss.detach().abs().cpu().numpy()
+        memory.update_priorities(indices, td_errors)
         
+        # Optimize model
+        self.optimizer.zero_grad()
+        dist_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 10)
+        self.optimizer.step()
+        
+        # Reset noisy layers
+        self.q_network.reset_noise()
+        self.target_network.reset_noise()
+        
+    def _project_dist(self, target_values, returns, done, gamma):
+        # Compute projected distribution (C51)
+        delta_z = (V_MAX - V_MIN) / (ATOMS - 1)
+        support = torch.linspace(V_MIN, V_MAX, ATOMS).to(device)
+        
+        target_dist = torch.zeros(target_values.shape[0], ATOMS).to(device)
+        for i in range(target_values.shape[0]):
+            if done[i]:
+                target_dist[i] = torch.nn.functional.one_hot(torch.argmax(target_values[i]), ATOMS).float()
+            else:
+                tz = returns[i] + gamma * support
+                tz.clamp_(V_MIN, V_MAX)
+                b = (tz - V_MIN) / delta_z
+                l = b.floor().long()
+                u = b.ceil().long()
+                d_m_l = (b - l).unsqueeze(1).expand(-1, ATOMS)
+                d_m_u = (u - b).unsqueeze(1).expand(-1, ATOMS)
+                target_dist[i] = target_values[i] * (d_m_l * (u == l).float() + d_m_u * (u!= l).float())
+        
+        return target_dist
+    
     def update_target_network(self):
         # Soft update of target network
         tau = 0.005
@@ -358,7 +404,7 @@ class PacmanTrainer:
 
                 state = next_state if not done else None
 
-                self.agent.optimize_model(self.memory, gamma=0.99)
+                self.agent.optimize_model(self.memory, gamma=0.99, n_step=3)
                 if done:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
