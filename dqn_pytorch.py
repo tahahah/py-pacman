@@ -29,7 +29,7 @@ from redis.retry import Retry
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
 from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
-
+from model import DQN
 # Load environment variables from .env file
 load_dotenv()
 wandb.login(key=os.getenv('WANDB_API_KEY'))
@@ -46,68 +46,10 @@ Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'
 
 MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
-class DQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
-    def __init__(self, input_dim, output_dim):
-        super(DQN, self).__init__()
-        c, h, w = input_dim
-        self.net = nn.Sequential(
-            nn.Conv2d(in_channels=c, out_channels=32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(3136, 512),
-            nn.ReLU(),
-            nn.Linear(512, output_dim)
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-
-class DuelingDQN(nn.Module, huggingface_hub.PyTorchModelHubMixin):
-    def __init__(self, input_dim, output_dim):
-        super(DuelingDQN, self).__init__()
-        c, h, w = input_dim
-        
-        # Feature extraction layers
-        self.features = nn.Sequential(
-            nn.Conv2d(in_channels=c, out_channels=32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten()
-        )
-        
-        # Value stream
-        self.value_stream = nn.Sequential(
-            nn.Linear(3136, 512),
-            nn.ReLU(),
-            nn.Linear(512, 1)
-        )
-        
-        # Advantage stream
-        self.advantage_stream = nn.Sequential(
-            nn.Linear(3136, 512),
-            nn.ReLU(),
-            nn.Linear(512, output_dim)
-        )
-
-    def forward(self, x):
-        features = self.features(x)
-        values = self.value_stream(features)
-        advantages = self.advantage_stream(features)
-        return values + (advantages - advantages.mean(dim=1, keepdim=True))
-
-
 class PacmanAgent:
     def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_duelingDQN"):
-        self.policy_net = DuelingDQN(input_dim, output_dim).to(device)
-        self.target_net = DuelingDQN(input_dim, output_dim).to(device)
+        self.policy_net = DQN(input_dim, output_dim).to(device)
+        self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00004, eps=1.5e-4)
