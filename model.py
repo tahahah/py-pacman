@@ -51,29 +51,29 @@ class DQN(nn.Module):
                 architecture='canonical',  # Using simpler architecture as default
                 hidden_size=512,  # Common default value
                 noisy_std=0.1):  # Common default value
-      super(DQN, self).__init__()
-      self.atoms = atoms
-      self.action_space = output_dim
-      c, h, w= input_dim
-      if architecture == 'canonical':
-          self.convs = nn.Sequential(
-              nn.Conv2d(c, 32, 8, stride=4, padding=0), nn.ReLU(),
-              nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
-              nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU())
-          self.conv_output_size = 3136
-      elif architecture == 'data-efficient':
-          self.convs = nn.Sequential(
-              nn.Conv2d(c, 32, 5, stride=5, padding=0), nn.ReLU(),
-              nn.Conv2d(32, 64, 5, stride=5, padding=0), nn.ReLU())
-          self.conv_output_size = 576
+    super(DQN, self).__init__()
+    self.atoms = atoms
+    self.action_space = output_dim
+    c, h, w= input_dim
+    if architecture == 'canonical':
+        self.convs = nn.Sequential(
+            nn.Conv2d(c, 32, 8, stride=4, padding=0), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
+            nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU())
+        self.conv_output_size = 3136
+    elif architecture == 'data-efficient':
+        self.convs = nn.Sequential(
+            nn.Conv2d(c, 32, 5, stride=5, padding=0), nn.ReLU(),
+            nn.Conv2d(32, 64, 5, stride=5, padding=0), nn.ReLU())
+        self.conv_output_size = 576
 
-      self.fc_h_v = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
-      self.fc_h_a = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
-      self.fc_z_v = NoisyLinear(hidden_size, self.atoms, std_init=noisy_std)
-      self.fc_z_a = NoisyLinear(hidden_size, output_dim * self.atoms, std_init=noisy_std)
+    self.fc_h_v = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
+    self.fc_h_a = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
+    self.fc_z_v = NoisyLinear(hidden_size, self.atoms, std_init=noisy_std)
+    self.fc_z_a = NoisyLinear(hidden_size, output_dim * self.atoms, std_init=noisy_std)
 
 
-  def forward(self, x, log=False):
+  def forward(self, x, log=False, return_distribution=False):
     x = self.convs(x)
     x = x.view(-1, self.conv_output_size)
     v = self.fc_z_v(F.relu(self.fc_h_v(x)))  # Value stream
@@ -81,10 +81,17 @@ class DQN(nn.Module):
     v, a = v.view(-1, 1, self.atoms), a.view(-1, self.action_space, self.atoms)
     q = v + a - a.mean(1, keepdim=True)  # Combine streams
     if log:  # Use log softmax for numerical stability
-      q = F.log_softmax(q, dim=2)  # Log probabilities with action over second dimension
+        q = F.log_softmax(q, dim=2)  # Log probabilities with action over second dimension
     else:
-      q = F.softmax(q, dim=2)  # Probabilities with action over second dimension
-    return q
+        q = F.softmax(q, dim=2)  # Probabilities with action over second dimension
+    
+    if return_distribution:
+        return q
+    else:
+        # Calculate the expected Q-values
+        support = torch.linspace(-10, 10, self.atoms, device=x.device)  # Adjust support values as needed
+        q_values = (q * support).sum(2)
+        return q_values
 
   def reset_noise(self):
     for name, module in self.named_children():

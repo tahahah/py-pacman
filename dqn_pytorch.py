@@ -104,9 +104,6 @@ class PacmanAgent:
         
         self.optimizer.step()
         
-        # Update priorities in buffer
-        memory.update_priorities(indices, td_errors.squeeze().cpu().numpy())
-        
     def update_target_network(self):
         # Soft update of target network
         tau = 0.005
