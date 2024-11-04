@@ -75,7 +75,7 @@ class PacmanAgent:
                 state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
                 return self.policy_net(state).max(1)[1].item()
 
-    def optimize_model(self, memory, gamma=0.99):
+    def optimize_model(self, memory, gamma=0.99, pellets_left=0):
         if self.steps_done < 1e3:
             return
             
@@ -95,6 +95,7 @@ class PacmanAgent:
         # Calculate weighted loss
         loss = (weights.unsqueeze(1) * F.smooth_l1_loss(state_action_values, 
                 expected_state_action_values.unsqueeze(1), reduction='none')).mean()
+        wandb.log({"loss": loss})
         
         self.optimizer.zero_grad()
         loss.backward()
@@ -146,7 +147,7 @@ class DataRecord(BaseModel):
     is_last_batch: bool
 
 class PacmanTrainer:
-    def __init__(self, layout, episodes, frames_to_skip, save_locally, enable_rmq):
+    def __init__(self, layout, episodes, frames_to_skip, save_locally, enable_rmq, log_video_to_wandb=True):
         self.layout = layout
         self.episodes = episodes
         self.frames_to_skip = frames_to_skip
@@ -159,6 +160,7 @@ class PacmanTrainer:
         self.save_locally = save_locally | False
         self.enable_rmq = enable_rmq
         self.action_encoder = ActionEncoder()
+        self.log_video_to_wandb = log_video_to_wandb
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     def _create_environment(self):
@@ -289,7 +291,7 @@ class PacmanTrainer:
                 reward = max(-1.0, min(reward, 1.0))
                 ep_reward += reward
                 
-                if self.enable_rmq or self.save_locally:
+                if self.enable_rmq or self.save_locally or (i_episode % 300 == 0 and self.log_video_to_wandb):
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
 
@@ -297,7 +299,7 @@ class PacmanTrainer:
 
                 state = next_state if not done else None
 
-                self.agent.optimize_model(self.memory, gamma=0.99)
+                self.agent.optimize_model(self.memory, gamma=0.99, pellets_left=self.env.maze.get_number_of_pellets())
                 if done:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
@@ -316,16 +318,15 @@ class PacmanTrainer:
                 if buffer_size >= max_batch_size:
                     logging.warning("BUFFER SIZE EXCEEDING 500MB")
                 self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
-                frames_buffer, actions_buffer = [], []
                 # batch_id += 1
 
             # Send remaining data at the end of the episode
             if frames_buffer and self.enable_rmq:
                 self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
-                frames_buffer, actions_buffer = [], []
+            
 
             if i_episode > 2: 
-                if i_episode % 10 == 0:
+                if i_episode % 100 == 0:
                     self.agent.update_target_network()
                     logging.info(f"Updated target network at episode {i_episode}")
                     if torch.cuda.is_available():
@@ -336,6 +337,15 @@ class PacmanTrainer:
                 if i_episode % 1000 == 0:
                     self.agent.save_model('pacman.pth')
                     logging.info(f"Saved model at episode {i_episode}")
+
+                if i_episode % 300 == 0:
+                    frames = np.array(frames_buffer)
+                    video = wandb.Video(frames, fps=20, format="gif")
+                    wandb.log({"video": video})
+
+            frames_buffer, actions_buffer = [], []
+            
+
 
         logging.info('Training Complete')
         self.env.close()
