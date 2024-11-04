@@ -82,6 +82,7 @@ urllib3==2.2.3
 uv==0.4.18
 watchfiles==0.24.0
 wandb==0.18.3
+wandb[media]
 xxhash==3.5.0
 yarl==1.11.1
 zipp==3.20.2
