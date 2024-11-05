@@ -105,7 +105,7 @@ class PacmanAgent:
         td_errors = torch.abs(state_action_values - expected_state_action_values).detach()
         
         # Calculate weighted loss
-        loss = (weights * F.smooth_l1_loss(state_action_values, expected_state_action_values, reduction='none')).mean()
+        loss = (weights * F.smooth_l1_loss(state_action_values, expected_state_action_values, reduction='none')).mean() + pellets_left
         wandb.log({"loss": loss})
         
         self.optimizer.zero_grad()  # Zero the gradients
