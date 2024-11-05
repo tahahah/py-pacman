@@ -36,7 +36,7 @@ COPY requirements.txt .
 
 
 # Ensure pip is below version 24.1
-RUN pip install "pip<24.1" wheel==0.38.0 setuptools==56.0.0
+RUN pip install "pip<24.1" wheel==0.36.2 setuptools==56.0.0
 
 # Install the dependencies from requirements.txt
 RUN pip install -r requirements.txt
