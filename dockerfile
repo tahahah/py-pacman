@@ -1,6 +1,11 @@
 # Use the official CUDA 12.2 base image from NVIDIA
 FROM nvidia/cuda:12.2.2-base-ubuntu22.04
 
+# Set environment variables
+ENV PYTHONUNBUFFERED 1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Australia/Sydney
+
 # Install Python 3.8 from deadsnakes PPA
 RUN apt-get update && apt-get install -y software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
