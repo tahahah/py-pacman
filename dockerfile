@@ -6,8 +6,9 @@ ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Australia/Sydney
 
+
 # Install Miniconda
-RUN apt-get update && apt-get install -y wget bzip2 \
+RUN apt-get update && apt-get install -y wget bzip2 expect \
     && wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /miniconda.sh \
     && bash /miniconda.sh -b -p /opt/conda \
     && rm /miniconda.sh \
