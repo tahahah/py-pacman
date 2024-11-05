@@ -76,12 +76,22 @@ class PacmanAgent:
                 return self.policy_net(state).max(1)[1].item()
 
     def optimize_model(self, memory, gamma=0.99, pellets_left=0):
-        if len(memory.memory) < 32:
+        logging.info("optimize_model called")  # Add this line to log when optimize_model is called
+
+        if len(memory) < 32:  # Ensure there are enough samples in the memory
+            logging.info("Not enough samples in memory to optimize")
             return
-            
-        state, next_state, action, reward, done, indices, weights = memory.sample()
+
+        state, next_state, action, reward, done, indices, weights = memory.sample(32)
         
-        state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
+        state = torch.tensor(state, device=device, dtype=torch.float32)
+        next_state = torch.tensor(next_state, device=device, dtype=torch.float32)
+        action = torch.tensor(action, device=device, dtype=torch.long)
+        reward = torch.tensor(reward, device=device, dtype=torch.float32)
+        done = torch.tensor(done, device=device, dtype=torch.float32)
+        weights = torch.tensor(weights, device=device, dtype=torch.float32)
+
+        state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1)).squeeze(1)
         
         with torch.no_grad():
             next_actions = self.policy_net(next_state).max(1)[1]
@@ -90,21 +100,20 @@ class PacmanAgent:
             expected_state_action_values = (next_state_values * gamma) + reward
             
         # Calculate TD errors for priority updating
-        td_errors = torch.abs(state_action_values - expected_state_action_values.unsqueeze(1)).detach()
+        td_errors = torch.abs(state_action_values - expected_state_action_values).detach()
         
         # Calculate weighted loss
-        loss = (weights.unsqueeze(1) * F.smooth_l1_loss(state_action_values, 
-                expected_state_action_values.unsqueeze(1), reduction='none')).mean()
+        loss = (weights * F.smooth_l1_loss(state_action_values, expected_state_action_values, reduction='none')).mean()
         logging.info(f"Loss: {loss}")
         wandb.log({"loss": loss})
         
-        self.optimizer.zero_grad()
-        loss.backward()
-        
-        # Clip gradients
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
-        
-        self.optimizer.step()
+        self.optimizer.zero_grad()  # Zero the gradients
+        loss.backward()  # Backpropagation
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)  # Clip gradients
+        self.optimizer.step()  # Update the model parameters
+
+        # Update priorities in the replay buffer
+        memory.update_priorities(indices, td_errors.cpu().numpy())
         
     def update_target_network(self):
         # Soft update of target network
