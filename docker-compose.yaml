@@ -24,7 +24,9 @@ services:
           memory: 16g  # Increase this value
         reservations:
           devices:
-            - capabilities: [gpu]
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
         
   rabbitmqserver:
     container_name: rabbitmqServer

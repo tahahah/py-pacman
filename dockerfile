@@ -1,5 +1,10 @@
-# Use the official Python 3.8 image from the Docker Hub
-FROM python:3.8
+# Use the official CUDA 12.2 base image from NVIDIA
+FROM nvidia/cuda:12.2.2-base-ubuntu22.04
+
+# Install Python 3.8
+RUN apt-get update && apt-get install -y python3.8 python3-pip
+
+# Copy the uv tool from the GitHub container registry
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 ENV UV_SYSTEM_PYTHON=1
 
@@ -14,7 +19,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install the dependencies from requirements.txt and error if pip errors
-RUN pip install -r requirements.txt
+RUN pip3 install -r requirements.txt
 
 # Copy the rest of your application code into the container
 COPY --chown=app:app . .

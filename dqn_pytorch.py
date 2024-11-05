@@ -41,6 +41,7 @@ HF_TOKEN = os.getenv('HF_TOKEN')
 # if gpu is to be used
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
+logging.info(f"CUDA available: {USE_CUDA}")
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
