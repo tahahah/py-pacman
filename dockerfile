@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y wget bzip2 \
 ENV PATH=/opt/conda/bin:$PATH
 
 # Install Python 3.8 and PyTorch nightly build with CUDA 12.2
-RUN conda install python=3.8 -y \
+RUN conda install python=3.8.2 -y \
     && conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
 
 # Copy the uv tool from the GitHub container registry
