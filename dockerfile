@@ -2,7 +2,7 @@
 FROM nvidia/cuda:12.2.2-base-ubuntu22.04
 
 # Install Python 3.8
-RUN apt-get update && apt-get install -y python3.8 python3-pip
+RUN apt update && apt-get update -y && apt-get install -y python3.8 python3-pip
 
 # Copy the uv tool from the GitHub container registry
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
