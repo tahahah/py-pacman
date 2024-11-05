@@ -1,4 +1,7 @@
 import argparse
+
+import logging
+from typing import Any, List
 import json
 import math
 import os
@@ -143,8 +146,6 @@ class PacmanAgent:
         agent.target_net.load_state_dict(state_dict)
         return agent
 
-import logging
-from typing import Any, List
 
 from pydantic import BaseModel, Field
 class DataRecord(BaseModel):
