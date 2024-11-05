@@ -96,7 +96,7 @@ class PacmanAgent:
         with torch.no_grad():
             next_actions = self.policy_net(next_state).max(1)[1]
             next_state_values = self.target_net(next_state).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            next_state_values[done] = 0.0
+            next_state_values[done.bool()] = 0.0  # Convert done to boolean tensor
             expected_state_action_values = (next_state_values * gamma) + reward
             
         # Calculate TD errors for priority updating
