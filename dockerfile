@@ -34,7 +34,9 @@ WORKDIR /app
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
 
-RUN pip install pip<24.1
+
+# Ensure pip is below version 24.1
+RUN pip install "pip<24.1"
 
 RUN pip install setuptools==56.0.0
 
