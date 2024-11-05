@@ -76,7 +76,8 @@ class PacmanAgent:
                 return self.policy_net(state).max(1)[1].item()
 
     def optimize_model(self, memory, gamma=0.99, pellets_left=0):
-        logging.info("optimize_model called")  # Add this line to log when optimize_model is called
+        if len(memory.memory) < 32:
+            return
             
         state, next_state, action, reward, done, indices, weights = memory.sample()
         
