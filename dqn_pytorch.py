@@ -104,7 +104,6 @@ class PacmanAgent:
         
         # Calculate weighted loss
         loss = (weights * F.smooth_l1_loss(state_action_values, expected_state_action_values, reduction='none')).mean()
-        logging.info(f"Loss: {loss}")
         wandb.log({"loss": loss})
         
         self.optimizer.zero_grad()  # Zero the gradients
