@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y software-properties-common \
     && DEBIAN_FRONTEND=noninteractive add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3.8 python3.8-distutils \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip \
-    && ln -s /usr/bin/python3.8 /usr/bin/python \
-    && ln -s /usr/bin/python3.8 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.8 /usr/bin/python \
+    && ln -sf /usr/bin/python3.8 /usr/bin/python3 \
     && ln -sf /usr/bin/pip3 /usr/bin/pip
 
 
