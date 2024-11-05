@@ -25,6 +25,15 @@ ENV PATH=/opt/conda/bin:$PATH
 RUN conda install python=3.8.2 -y \
     && conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
 
+
+#
+RUN cd /opt/conda/lib \
+    && mkdir backup \
+    && mv libstd* backup \
+    && cp /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ./ \
+    && ln -s libstdc++.so.6 libstdc++.so \
+    && ln -s libstdc++.so.6 libstdc++.so.6.0.19
+
 # Copy the uv tool from the GitHub container registry
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 ENV UV_SYSTEM_PYTHON=1
