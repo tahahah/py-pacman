@@ -10,9 +10,6 @@ ENV TZ=Australia/Sydney
 RUN apt-get update && apt-get install -y \
     wget \
     bzip2 \
-    expect \
-    tcl \
-    expect-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Miniconda
@@ -41,7 +38,6 @@ WORKDIR /app
 
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
-
 
 # Ensure pip is below version 24.1
 RUN pip install "pip<24.1" wheel==0.36.2 setuptools==56.0.0
