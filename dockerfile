@@ -2,19 +2,23 @@
 FROM nvidia/cuda:12.2.2-base-ubuntu22.04
 
 # Set environment variables
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Australia/Sydney
 
-# Install Python 3.8 from deadsnakes PPA
-RUN apt-get update && apt-get install -y software-properties-common \
-    && DEBIAN_FRONTEND=noninteractive add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3.8 python3.8-distutils \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip \
-    && ln -sf /usr/bin/python3.8 /usr/bin/python \
-    && ln -sf /usr/bin/python3.8 /usr/bin/python3 \
-    && ln -sf /usr/bin/pip3 /usr/bin/pip
+# Install Miniconda
+RUN apt-get update && apt-get install -y wget bzip2 \
+    && wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /miniconda.sh \
+    && bash /miniconda.sh -b -p /opt/conda \
+    && rm /miniconda.sh \
+    && /opt/conda/bin/conda clean -tipsy
 
+# Update PATH environment variable
+ENV PATH=/opt/conda/bin:$PATH
+
+# Install Python 3.8 and PyTorch nightly build with CUDA 12.1
+RUN conda install python=3.8 -y \
+    && conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
 
 # Copy the uv tool from the GitHub container registry
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
@@ -30,8 +34,8 @@ WORKDIR /app
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
 
-# Install the dependencies from requirements.txt and error if pip errors
-RUN python3.8 -m pip install -r requirements.txt
+# Install the dependencies from requirements.txt
+RUN pip install -r requirements.txt
 
 # Copy the rest of your application code into the container
 COPY --chown=app:app . .
