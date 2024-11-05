@@ -1,8 +1,11 @@
 # Use the official CUDA 12.2 base image from NVIDIA
 FROM nvidia/cuda:12.2.2-base-ubuntu22.04
 
-# Install Python 3.8
-RUN apt update && apt-get update -y && apt-get install -y python3.8 python3-pip
+# Install Python 3.8 from deadsnakes PPA
+RUN apt-get update && apt-get install -y software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y python3.8 python3.8-distutils \
+    && apt-get install -y python3-pip
 
 # Copy the uv tool from the GitHub container registry
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
@@ -19,7 +22,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install the dependencies from requirements.txt and error if pip errors
-RUN pip3 install -r requirements.txt
+RUN python3.8 -m pip install -r requirements.txt
 
 # Copy the rest of your application code into the container
 COPY --chown=app:app . .
