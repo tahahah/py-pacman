@@ -78,7 +78,7 @@ class PacmanAgent:
     def optimize_model(self, memory, gamma=0.99, pellets_left=0):
         logging.info("optimize_model called")  # Add this line to log when optimize_model is called
 
-        if len(memory) < 32:  # Ensure there are enough samples in the memory
+        if memory.batch_size < 32:  # Ensure there are enough samples in the memory
             logging.info("Not enough samples in memory to optimize")
             return
             
@@ -274,7 +274,7 @@ class PacmanTrainer:
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(screen.shape, n_actions)
-        self.memory = ReplayBuffer(100000)  # BATCH_SIZE = 32
+        self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
 
         frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
