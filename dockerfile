@@ -11,12 +11,12 @@ RUN apt-get update && apt-get install -y wget bzip2 \
     && wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /miniconda.sh \
     && bash /miniconda.sh -b -p /opt/conda \
     && rm /miniconda.sh \
-    && /opt/conda/bin/conda clean -tipsy
+    && /opt/conda/bin/conda clean -a
 
 # Update PATH environment variable
 ENV PATH=/opt/conda/bin:$PATH
 
-# Install Python 3.8 and PyTorch nightly build with CUDA 12.1
+# Install Python 3.8 and PyTorch nightly build with CUDA 12.2
 RUN conda install python=3.8 -y \
     && conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
 
