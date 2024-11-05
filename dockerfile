@@ -34,7 +34,7 @@ WORKDIR /app
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
 
-RUN pip install setuptools==56.2.0
+RUN pip install setuptools==56.0.0
 
 # Install the dependencies from requirements.txt
 RUN pip install -r requirements.txt
