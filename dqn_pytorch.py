@@ -77,12 +77,8 @@ class PacmanAgent:
 
     def optimize_model(self, memory, gamma=0.99, pellets_left=0):
         logging.info("optimize_model called")  # Add this line to log when optimize_model is called
-
-        if memory.batch_size < 32:  # Ensure there are enough samples in the memory
-            logging.info("Not enough samples in memory to optimize")
-            return
             
-        state, next_state, action, reward, done, indices, weights = memory.sample(32)
+        state, next_state, action, reward, done, indices, weights = memory.sample()
         
         state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
         
