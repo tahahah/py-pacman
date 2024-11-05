@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 # Check if Xvfb is running and shut it down if it is
 if pgrep Xvfb > /dev/null; then
     echo "Xvfb is already running. Shutting it down..."
@@ -30,9 +29,6 @@ fi
 # Start Xvfb
 Xvfb :99 -screen 0 1024x768x24 &
 
-# Start Xvfb
-Xvfb :99 -screen 0 1024x768x24 &
-
 # Set the DISPLAY environment variable
 export DISPLAY=:99
 
@@ -56,11 +52,10 @@ if ! command -v unbuffer &> /dev/null
 then
     apt-get update
     apt-get install -y expect
-    ln -s /usr/bin/unbuffer /usr/local/bin/unbuffer  # Ensure unbuffer is in PATH
+    ln -sf /usr/bin/unbuffer /usr/local/bin/unbuffer  # Ensure unbuffer is in PATH
 fi
 
 # Run your Python script with unbuffer to see logs in real time
-# unbuffer python dqn_pytorch.py -lay classic -e 10000 -t -frs 4 -rmq
 unbuffer python dqn_pytorch.py -lay classic -e 10000 -t -frs 4
 
 # Keep the container running
