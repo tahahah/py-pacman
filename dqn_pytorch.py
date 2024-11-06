@@ -293,7 +293,7 @@ class PacmanTrainer:
 
             for t in count():
                 current_frame = self.env.render(mode='rgb_array')
-                self.env.render(mode='human')
+                # self.env.render(mode='human')
 
                 action = self.agent.select_action(state, epsilon, n_actions)
                 next_state, reward, done, _ = self.env.step(action)

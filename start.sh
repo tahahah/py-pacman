@@ -47,8 +47,8 @@ ctl.!default {
 }
 EOL
 
-# Run your Python script with unbuffered output
-python -u dqn_pytorch.py -lay classic -e 20001 -t -frs 4
+# Run your Python script with unbuffered output and redirect output to both console and log file
+python -u dqn_pytorch.py -lay classic -e 20001 -t -frs 4 | tee -a /path/to/logfile.log
 
 # Keep the container running
 tail -f /dev/null
