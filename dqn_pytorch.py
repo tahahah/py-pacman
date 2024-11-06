@@ -349,16 +349,26 @@ class PacmanTrainer:
 
                 
                 if i_episode % 5 == 0 and frames_buffer:
-                    # Ensure frames are in the correct format
-                    frames = [np.array(frame) for frame in frames_buffer]
+                    # Ensure frames are in the correct format and range
+                    frames = [np.array(frame).astype(np.uint8) for frame in frames_buffer]
                     
-                    # Convert frames to a format that wandb.Video expects
+                    # Check if frames are already in range [0, 255], if not, scale them
+                    if frames[0].max() <= 1.0:
+                        frames = [frame * 255 for frame in frames]
+                    
+                    # Stack frames
                     frames = np.stack(frames)
-                    frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
+                    
+                    # Ensure frames are in the correct format (time, height, width, channel)
+                    # No need to transpose if your frames are already in (H, W, C) format
                     
                     # Create and log the video
-                    video = wandb.Video(frames, fps=20, format="mp4")
-                    wandb.log({"video": video})
+                    video = wandb.Video(frames, fps=20, format="gif")  # Changed to mp4 format
+                    wandb.log({
+                        "video": video,
+                        "image": current_frame,
+                        "episode": i_episode
+                    })
 
 
             frames_buffer, actions_buffer = [], []
