@@ -300,7 +300,7 @@ class PacmanTrainer:
                 reward = max(-1.0, min(reward, 1.0))
                 ep_reward += reward
                 
-                if self.enable_rmq or self.save_locally or (i_episode % 300 == 0 and self.log_video_to_wandb):
+                if self.enable_rmq or self.save_locally or (i_episode % 5 == 0 and self.log_video_to_wandb):
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
 
