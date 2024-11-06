@@ -358,9 +358,7 @@ class PacmanTrainer:
                     
                     # Stack frames
                     frames = np.stack(frames)
-                    
-                    # Ensure frames are in the correct format (time, height, width, channel)
-                    # No need to transpose if your frames are already in (H, W, C) format
+                    frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
                     
                     # Create and log the video
                     video = wandb.Video(frames, fps=20, format="gif")  # Changed to mp4 format
