@@ -69,4 +69,4 @@ RUN apt-get update && apt-get install -y \
 
 # Create necessary directories for X11
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
-ENTRYPOINT ["python", "-u", "dqn_pytorch.py", "-lay", "classic", "-e", "20001", "-t", "-frs", "4"]
+CMD ["python", "-u", "dqn_pytorch.py", "-lay", "classic", "-e", "20001", "-t", "-frs", "4"]
