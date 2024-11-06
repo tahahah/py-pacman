@@ -347,23 +347,19 @@ class PacmanTrainer:
                     self.agent.save_model('pacman.pth')
                     logging.info(f"Saved model at episode {i_episode}")
 
-                if i_episode % 5 == 0:
+                
+                if i_episode % 5 == 0 and frames_buffer:
                     # Ensure frames are in the correct format
                     frames = [np.array(frame) for frame in frames_buffer]
                     
-                    # Check the shape of the frames
-                    frame_shape = frames[0].shape
-                    logging.info(f"Frame shape: {frame_shape}")
-                    
                     # Convert frames to a format that wandb.Video expects
-                    # Ensure the frames have the shape (height, width, channels)
-                    if len(frame_shape) == 3 and frame_shape[0] < frame_shape[1]:
-                        frames = [np.transpose(frame, (1, 0, 2)) for frame in frames]
+                    frames = np.stack(frames)
+                    frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
                     
-                    video = wandb.Video(np.stack(frames), fps=20, format="gif")
-                    
-                    # Log the video to wandb
+                    # Create and log the video
+                    video = wandb.Video(frames, fps=20, format="gif")
                     wandb.log({"video": video})
+
 
             frames_buffer, actions_buffer = [], []
             
