@@ -365,7 +365,6 @@ class PacmanTrainer:
                     wandb.log({
                         "video": video,
                         "image": wandb.Image(current_frame),
-                        "episode": i_episode
                     })
 
 
