@@ -297,7 +297,7 @@ class PacmanTrainer:
                 except:
                     pass
 
-                current_frame = self.env.frames[-1]  #render(mode='rgb_array')
+                current_frame = self.env.render(mode='rgb_array')
                 # self.env.render(mode='human')
 
                 action = self.agent.select_action(state, epsilon, n_actions)
@@ -374,12 +374,10 @@ class PacmanTrainer:
                     })
                     
                     # Save the video locally
-                    video_save_path = f"data/video_data/episode_{i_episode}/video.mp4"
-                    os.makedirs(os.path.dirname(video_save_path), exist_ok=True)
-                    with open(video_save_path, "wb") as f:
-                        f.write(video.getvalue())
-                    
-                    logging.warning(f"Saved video to {video_save_path}")
+                    frame_save_path = f"data/episode_{i_episode}/frame_{len(frames_buffer)}.png"
+                    os.makedirs(os.path.dirname(frame_save_path), exist_ok=True)
+                    Image.fromarray(previous_frame).save(frame_save_path)
+                    logging.warning(f"Saved previous frame to {frame_save_path}")
 
 
             frames_buffer, actions_buffer = [], []
