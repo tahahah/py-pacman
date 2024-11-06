@@ -357,7 +357,7 @@ class PacmanTrainer:
                     frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
                     
                     # Create and log the video
-                    video = wandb.Video(frames, fps=20, format="gif")
+                    video = wandb.Video(frames, fps=20, format="mp4")
                     wandb.log({"video": video})
 
 
