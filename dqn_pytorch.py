@@ -373,11 +373,6 @@ class PacmanTrainer:
                         "image": wandb.Image(previous_frame),
                     })
                     
-                    # Save the video locally
-                    frame_save_path = f"data/episode_{i_episode}/frame_{len(frames_buffer)}.png"
-                    os.makedirs(os.path.dirname(frame_save_path), exist_ok=True)
-                    Image.fromarray(previous_frame).save(frame_save_path)
-                    logging.warning(f"Saved previous frame to {frame_save_path}")
 
 
             frames_buffer, actions_buffer = [], []
@@ -427,7 +422,7 @@ class PacmanTrainer:
 
     def _save_frames_locally(self, frames, episode, actions):
         # Create a directory for the episode if it doesn't exist
-        episode_dir = f"episode_{episode}_frs{self.frames_to_skip}"
+        episode_dir = f"data/episode_{episode}_frs{self.frames_to_skip}"
         if not os.path.exists(episode_dir):
             os.makedirs(episode_dir)
 
