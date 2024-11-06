@@ -351,7 +351,15 @@ class PacmanTrainer:
                     # Ensure frames are in the correct format
                     frames = [np.array(frame) for frame in frames_buffer]
                     
+                    # Check the shape of the frames
+                    frame_shape = frames[0].shape
+                    logging.info(f"Frame shape: {frame_shape}")
+                    
                     # Convert frames to a format that wandb.Video expects
+                    # Ensure the frames have the shape (height, width, channels)
+                    if len(frame_shape) == 3 and frame_shape[0] < frame_shape[1]:
+                        frames = [np.transpose(frame, (1, 0, 2)) for frame in frames]
+                    
                     video = wandb.Video(np.stack(frames), fps=20, format="gif")
                     
                     # Log the video to wandb
