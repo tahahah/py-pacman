@@ -364,7 +364,7 @@ class PacmanTrainer:
                     video = wandb.Video(frames, fps=20, format="gif")  # Changed to mp4 format
                     wandb.log({
                         "video": video,
-                        "image": current_frame,
+                        "image": wandb.Image(current_frame),
                         "episode": i_episode
                     })
 
