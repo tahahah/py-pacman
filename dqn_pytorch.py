@@ -347,9 +347,14 @@ class PacmanTrainer:
                     self.agent.save_model('pacman.pth')
                     logging.info(f"Saved model at episode {i_episode}")
 
-                if i_episode % 300 == 0:
-                    frames = np.array(frames_buffer)
-                    video = wandb.Video(frames, fps=20, format="gif")
+                if i_episode % 5 == 0:
+                    # Ensure frames are in the correct format
+                    frames = [np.array(frame) for frame in frames_buffer]
+                    
+                    # Convert frames to a format that wandb.Video expects
+                    video = wandb.Video(np.stack(frames), fps=20, format="gif")
+                    
+                    # Log the video to wandb
                     wandb.log({"video": video})
 
             frames_buffer, actions_buffer = [], []
