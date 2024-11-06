@@ -44,11 +44,14 @@ HF_TOKEN = os.getenv('HF_TOKEN')
 # if gpu is to be used
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
-logging.warning(f"CUDA available: {USE_CUDA}")
+logging.info(f"CUDA available: {USE_CUDA}")
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
 MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
+
+logging.basicConfig(level=logging.INFO)
+
 
 class PacmanAgent:
     def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"):
@@ -67,9 +70,9 @@ class PacmanAgent:
             state_dict = torch.load(model_path, map_location=device)
             self.policy_net.load_state_dict(state_dict)
             self.target_net.load_state_dict(state_dict)
-            logging.warning(f"Model loaded from Hugging Face: {self.model_name}")
+            logging.info(f"Model loaded from Hugging Face: {self.model_name}")
         except Exception as e:
-            logging.warning(f"Could not load model from Hugging Face: {e}")
+            logging.info(f"Could not load model from Hugging Face: {e}")
 
     def select_action(self, state, epsilon, n_actions):
         if np.random.rand() < epsilon:
@@ -136,7 +139,7 @@ class PacmanAgent:
             huggingface_hub.create_repo(repo_id, repo_type="model")
             huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=repo_id, repo_type="model")
 
-        logging.warning(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {self.model_name}")
+        logging.info(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {self.model_name}")
 
     @classmethod
     def load_model(cls, input_dim, output_dim, filename):
@@ -170,7 +173,7 @@ class PacmanTrainer:
         self.enable_rmq = enable_rmq
         self.action_encoder = ActionEncoder()
         self.log_video_to_wandb = log_video_to_wandb
-        logging.basicConfig(level=logging.warning, format='%(asctime)s - %(levelname)s - %(message)s')
+        logging.basicConfig(level=logging.info, format='%(asctime)s - %(levelname)s - %(message)s')
 
     def _create_environment(self):
         env = PacmanEnv(layout=self.layout)
@@ -219,7 +222,7 @@ class PacmanTrainer:
             self.connection.close()
 
     def _save_data_to_redis(self, episode, frames_buffer, actions_buffer):
-        logging.warning("_save_data_to_redis invoked")
+        logging.info("_save_data_to_redis invoked")
         key = f"episode_{episode}"
         
         # Serialize data using pickle
@@ -238,14 +241,14 @@ class PacmanTrainer:
         original_size = sys.getsizeof(serialized_data)
         compressed_size = len(compressed_data)
         compression_ratio = compressed_size / original_size
-        logging.warning(f"Original size: {original_size} bytes, Compressed size: {compressed_size} bytes, Compression ratio: {compression_ratio:.2f}")
+        logging.info(f"Original size: {original_size} bytes, Compressed size: {compressed_size} bytes, Compression ratio: {compression_ratio:.2f}")
         
         # Clear the original buffers to free memory
         frames_buffer.clear()
         actions_buffer.clear()
         
         # Log the data being saved
-        logging.warning(f"Saving compressed data for episode {episode} to Redis with key {key}")
+        logging.info(f"Saving compressed data for episode {episode} to Redis with key {key}")
         
         self.redis_client.set(key, compressed_data)
         self.episode_keys_buffer.append(key)
@@ -255,20 +258,20 @@ class PacmanTrainer:
         del compressed_data
         
         # Log the current buffer size
-        logging.warning(f"Current episode keys buffer size: {len(self.episode_keys_buffer)}")
+        logging.info(f"Current episode keys buffer size: {len(self.episode_keys_buffer)}")
 
         # Publish keys to the queue every 20 episodes
         if len(self.episode_keys_buffer) >= 20:
-            logging.warning("Buffer size reached 20, publishing keys to queue")
+            logging.info("Buffer size reached 20, publishing keys to queue")
             self._publish_keys_to_queue()
             self.episode_keys_buffer.clear()
-            logging.warning("Episode keys buffer cleared after publishing")
+            logging.info("Episode keys buffer cleared after publishing")
 
     def _publish_keys_to_queue(self):
         if self.enable_rmq:
             message = json.dumps(self.episode_keys_buffer)
             self.channel.basic_publish(exchange='', routing_key='HF_upload_queue', body=message)
-            logging.warning(f"Published keys to RabbitMQ queue 'HF_upload_queue': {self.episode_keys_buffer}")
+            logging.info(f"Published keys to RabbitMQ queue 'HF_upload_queue': {self.episode_keys_buffer}")
 
 
     def train(self):
@@ -288,8 +291,8 @@ class PacmanTrainer:
             state = self.env.reset(mode='rgb_array')
             ep_reward = 0.
             epsilon = self._get_epsilon(i_episode)
-            logging.warning("-----------------------------------------------------")
-            logging.warning(f"Starting episode {i_episode} with epsilon {epsilon}")
+            logging.info("-----------------------------------------------------")
+            logging.info(f"Starting episode {i_episode} with epsilon {epsilon}")
             
             for t in count():
                 try:
@@ -318,7 +321,7 @@ class PacmanTrainer:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
                         self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
-                    logging.warning(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward} and {pellets_left} pellets left.")
+                    logging.info(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward} and {pellets_left} pellets left.")
                     
                     # Log the reward to wandb
                     wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": pellets_left})
@@ -328,9 +331,9 @@ class PacmanTrainer:
                 # Check if the batch size limit is reached
             if self.enable_rmq:
                 buffer_size = self._get_buffer_size(frames_buffer, actions_buffer)
-                logging.warning(f"Buffer size: {buffer_size} bytes")
+                logging.info(f"Buffer size: {buffer_size} bytes")
                 if buffer_size >= max_batch_size:
-                    logging.warning("BUFFER SIZE EXCEEDING 500MB")
+                    logging.info("BUFFER SIZE EXCEEDING 500MB")
                 self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
                 # batch_id += 1
 
@@ -342,15 +345,15 @@ class PacmanTrainer:
             if i_episode > 2: 
                 if i_episode % 100 == 0:
                     self.agent.update_target_network()
-                    logging.warning(f"Updated target network at episode {i_episode}")
+                    logging.info(f"Updated target network at episode {i_episode}")
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                        logging.warning(torch.cuda.memory_summary())
+                        logging.info(torch.cuda.memory_summary())
                     torch.autograd.set_detect_anomaly(True)
 
                 if i_episode % 1000 == 0:
                     self.agent.save_model('pacman.pth')
-                    logging.warning(f"Saved model at episode {i_episode}")
+                    logging.info(f"Saved model at episode {i_episode}")
 
                 
                 if i_episode % 5 == 0 and frames_buffer:
@@ -364,7 +367,7 @@ class PacmanTrainer:
                     # Stack frames
                     frames = np.stack(frames)
                     frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
-                    logging.warning(f"Video frames shape: {frames.shape}")
+                    logging.info(f"Video frames shape: {frames.shape}")
                     
                     # Create and log the video
                     video = wandb.Video(frames, fps=10, format="mp4")
@@ -379,7 +382,7 @@ class PacmanTrainer:
             
 
 
-        logging.warning('Training Complete')
+        logging.info('Training Complete')
         self.env.close()
         self.agent.save_model('pacman.pth')
         if self.enable_rmq:
@@ -418,7 +421,7 @@ class PacmanTrainer:
                                    routing_key='HF_upload_queue',
                                    body=message)
 
-        logging.warning("Published dataset to RabbitMQ queue 'HF_upload_queue'")
+        logging.info("Published dataset to RabbitMQ queue 'HF_upload_queue'")
 
     def _save_frames_locally(self, frames, episode, actions):
         # Create a directory for the episode if it doesn't exist
@@ -429,9 +432,16 @@ class PacmanTrainer:
         # Save each frame as a PNG file with the episode and action in the filename
         for idx, frame in enumerate(frames):
             action = actions[idx]
+            # Log the max and min pixel values of the frame before saving
+            logging.info(f"Frame {idx} max pixel value: {np.max(frame)}, min pixel value: {np.min(frame)}")
+            
+            # Check if the frame is completely black
+            if not np.any(frame):
+                logging.info(f"Frame {idx} is completely black")
+            
             filename = os.path.join(episode_dir, f"{idx:05d}.png")
             Image.fromarray(frame).save(filename)
-            # logging.warning(f"Saved frame {idx} of episode {episode} with action {action} to {filename}")
+            # logging.info(f"Saved frame {idx} of episode {episode} with action {action} to {filename}")
 
 class PacmanRunner:
     def __init__(self, layout):
