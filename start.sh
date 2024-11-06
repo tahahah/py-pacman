@@ -48,7 +48,7 @@ ctl.!default {
 EOL
 
 # Run your Python script with unbuffered output
-python -u dqn_pytorch.py -lay classic -e 10000 -t -frs 4
+python -u dqn_pytorch.py -lay classic -e 20001 -t -frs 4
 
 # Keep the container running
 tail -f /dev/null

@@ -451,6 +451,7 @@ class Game(object):
                 if ghost.state == GhostState.normal:
                     self.set_mode(GameMode.hit_ghost)
                     self.add_reward(-5)
+                    self.add_reward(-self.maze.get_number_of_pellets()*0.2)
                 elif ghost.state == GhostState.vulnerable:
                     self.add_score(ghost.value)
                     self.add_reward(5)
