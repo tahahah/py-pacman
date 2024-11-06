@@ -51,7 +51,7 @@ Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'
 MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_duelingDQN"):
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"):
         self.policy_net = DQN(input_dim, output_dim).to(device)
         self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
