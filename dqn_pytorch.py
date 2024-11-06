@@ -359,9 +359,10 @@ class PacmanTrainer:
                     # Stack frames
                     frames = np.stack(frames)
                     frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
+                    logging.info(f"Video frames shape: {frames.shape}")
                     
                     # Create and log the video
-                    video = wandb.Video(frames, fps=20, format="gif")  # Changed to mp4 format
+                    video = wandb.Video(frames, fps=10, format="gif")  # Changed to mp4 format
                     wandb.log({
                         "video": video,
                         "image": wandb.Image(current_frame),
