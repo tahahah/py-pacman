@@ -297,7 +297,7 @@ class PacmanTrainer:
                 except:
                     pass
 
-                current_frame = self.env.render(mode='rgb_array')
+                current_frame = self.env.frames[-1]  #render(mode='rgb_array')
                 # self.env.render(mode='human')
 
                 action = self.agent.select_action(state, epsilon, n_actions)
