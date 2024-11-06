@@ -292,7 +292,11 @@ class PacmanTrainer:
             logging.warning(f"Starting episode {i_episode} with epsilon {epsilon}")
             
             for t in count():
-                previous_frame = current_frame
+                try:
+                    previous_frame = current_frame
+                except:
+                    pass
+
                 current_frame = self.env.render(mode='rgb_array')
                 # self.env.render(mode='human')
 
