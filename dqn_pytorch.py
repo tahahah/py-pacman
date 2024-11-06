@@ -290,8 +290,9 @@ class PacmanTrainer:
             epsilon = self._get_epsilon(i_episode)
             logging.warning("-----------------------------------------------------")
             logging.warning(f"Starting episode {i_episode} with epsilon {epsilon}")
-
+            
             for t in count():
+                previous_frame = current_frame
                 current_frame = self.env.render(mode='rgb_array')
                 # self.env.render(mode='human')
 
@@ -365,7 +366,7 @@ class PacmanTrainer:
                     video = wandb.Video(frames, fps=10, format="mp4")
                     wandb.log({
                         "video": video,
-                        "image": wandb.Image(current_frame),
+                        "image": wandb.Image(previous_frame),
                     })
                     
                     # Save the video locally
