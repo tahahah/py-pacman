@@ -362,11 +362,19 @@ class PacmanTrainer:
                     logging.warning(f"Video frames shape: {frames.shape}")
                     
                     # Create and log the video
-                    video = wandb.Video(frames, fps=10, format="gif")  # Changed to mp4 format
+                    video = wandb.Video(frames, fps=10, format="mp4")
                     wandb.log({
                         "video": video,
                         "image": wandb.Image(current_frame),
                     })
+                    
+                    # Save the video locally
+                    video_save_path = f"data/video_data/episode_{i_episode}/video.mp4"
+                    os.makedirs(os.path.dirname(video_save_path), exist_ok=True)
+                    with open(video_save_path, "wb") as f:
+                        f.write(video.getvalue())
+                    
+                    logging.warning(f"Saved video to {video_save_path}")
 
 
             frames_buffer, actions_buffer = [], []
