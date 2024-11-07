@@ -437,9 +437,6 @@ class PacmanTrainer:
         # Save each frame as a PNG file with the episode and action in the filename
         for idx, frame in enumerate(frames):
             action = actions[idx]
-            # Log the max and min pixel values of the frame before saving
-            logging.warning(f"Frame {idx} max pixel value: {np.max(frame)}, min pixel value: {np.min(frame)}")
-            
             # Check if the frame is completely black
             if not np.any(frame):
                 logging.warning(f"Frame {idx} is completely black")
