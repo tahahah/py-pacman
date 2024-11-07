@@ -275,7 +275,8 @@ class PacmanTrainer:
     def train(self):
         if self.enable_rmq:
             self._setup_rabbitmq()
-
+        
+        
         screen = self.env.reset(mode='rgb_array')
         n_actions = self.env.action_space.n
 
@@ -284,6 +285,12 @@ class PacmanTrainer:
 
         frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
+
+        # Get the base environment to access the render method
+        base_env = self.env
+        while hasattr(base_env, 'env'):
+            base_env = base_env.env
+            
 
         for i_episode in range(self.episodes):
             state = self.env.reset(mode='rgb_array')
@@ -297,9 +304,9 @@ class PacmanTrainer:
                     previous_frame = current_frame
                 except:
                     pass
-
-                current_frame = self.env.render(mode='rgb_array')
-                # self.env.render(mode='human')
+                # Use the base environment's render method to get the frame
+                current_frame = base_env.render(mode='rgb_array')
+                self.env.render(mode='human')
 
                 action = self.agent.select_action(state, epsilon, n_actions)
                 next_state, reward, done, _ = self.env.step(action)
