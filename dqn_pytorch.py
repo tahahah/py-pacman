@@ -313,7 +313,7 @@ class PacmanTrainer:
                 reward = max(-1.0, min(reward, 1.0))
                 ep_reward += reward
                 
-                if self.enable_rmq or self.save_locally or (i_episode % 5 == 0 and self.log_video_to_wandb):
+                if self.enable_rmq or self.save_locally or (i_episode % 100 == 0 and self.log_video_to_wandb):
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
 
@@ -361,7 +361,7 @@ class PacmanTrainer:
                     logging.warning(f"Saved model at episode {i_episode}")
 
                 
-                if i_episode % 5 == 0 and frames_buffer:
+                if i_episode % 100 == 0 and frames_buffer:
                     # Ensure frames are in the correct format and range
                     frames = [np.array(frame).astype(np.uint8) for frame in frames_buffer]
                     
