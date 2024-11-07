@@ -320,8 +320,8 @@ class PacmanTrainer:
                 self.memory.cache(state, next_state, action, reward, done)
 
                 state = next_state if not done else None
-
-                self.agent.optimize_model(self.memory, gamma=0.99, pellets_left=self.env.maze.get_number_of_pellets())
+                if t%4==0:
+                    self.agent.optimize_model(self.memory, gamma=0.99, pellets_left=self.env.maze.get_number_of_pellets())
                 if done:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
