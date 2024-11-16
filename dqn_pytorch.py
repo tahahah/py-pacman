@@ -53,7 +53,7 @@ MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_v2"):
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_v3"):
         self.policy_net = DQN(input_dim, output_dim).to(device)
         self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -62,10 +62,11 @@ class PacmanAgent:
         self.steps_done = 0
 
         # Try to load the model from Hugging Face if it exists
+        self.pretrained_model = "pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"
         self.model_name = model_name
         try:
             huggingface_hub.login(token=HF_TOKEN)
-            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
+            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.pretrained_model if self.pretrained_model else self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
             state_dict = torch.load(model_path, map_location=device)
             self.policy_net.load_state_dict(state_dict)
             self.target_net.load_state_dict(state_dict)
@@ -336,7 +337,7 @@ class PacmanTrainer:
                 reward = max(-1.0, min(reward, 1.0))
                 ep_reward += reward
                 
-                if self.enable_rmq or self.save_locally or (i_episode % 100 == 0 and self.log_video_to_wandb):
+                if self.enable_rmq or self.save_locally or (i_episode % 1000 == 0 and self.log_video_to_wandb):
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
 
@@ -352,7 +353,7 @@ class PacmanTrainer:
                     logging.warning(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward} and {pellets_left} pellets left.")
                     
                     # Log the reward to wandb
-                    wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": pellets_left})
+                    wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": pellets_left, "epsilon": epsilon})
                     
                     break
 
@@ -384,7 +385,7 @@ class PacmanTrainer:
                     logging.warning(f"Saved model at episode {i_episode}")
 
                 
-                if i_episode % 100 == 0 and frames_buffer:
+                if i_episode % 1000 == 0 and frames_buffer:
                     # Ensure frames are in the correct format and range
                     frames = [np.array(frame).astype(np.uint8) for frame in frames_buffer]
                     
