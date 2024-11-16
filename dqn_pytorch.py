@@ -201,14 +201,15 @@ class VectorizedPacmanEnv:
         self.action_space = self.envs[0].action_space
         self.observation_space = self.envs[0].observation_space
 
-    def reset(self) -> torch.Tensor:
+    def reset(self) -> np.ndarray:
         states = []
         for env in self.envs:
             state = env.reset(mode='rgb_array')
             states.append(state)
-        return torch.tensor(np.array(states), device=device, dtype=torch.float32)
+        states_np = np.array(states)
+        return states_np  # Return numpy array instead of tensor
 
-    def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[dict]]:
+    def step(self, actions: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[dict]]:
         next_states, rewards, dones, infos = [], [], [], []
         
         for env, action in zip(self.envs, actions):
@@ -224,9 +225,9 @@ class VectorizedPacmanEnv:
             infos.append(info)
         
         return (
-            torch.tensor(np.array(next_states), device=device, dtype=torch.float32),
-            torch.tensor(rewards, device=device, dtype=torch.float32),
-            torch.tensor(dones, device=device, dtype=torch.bool),
+            np.array(next_states),  # Return numpy arrays instead of tensors
+            np.array(rewards),
+            np.array(dones),
             infos
         )
 
@@ -357,7 +358,7 @@ class PacmanTrainer:
         if self.enable_rmq:
             self._setup_rabbitmq()
         
-        states = self.env.reset()
+        states = self.env.reset()  # Now returns numpy array
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(states[0].shape, n_actions)
@@ -380,9 +381,8 @@ class PacmanTrainer:
                 "training/episode": episode_count
             })
             
-            # Batch process states for action selection
-            states_np = np.stack([state.__array__() for state in states])
-            states_tensor = torch.tensor(states_np, device=device, dtype=torch.float32)
+            # Convert numpy states to tensor for network
+            states_tensor = torch.tensor(states, device=device, dtype=torch.float32)
             
             # Get actions for all environments in parallel
             with torch.no_grad():
@@ -400,12 +400,12 @@ class PacmanTrainer:
                 except:
                     pass
 
-            # Step all environments
+            # Step all environments (now returns numpy arrays)
             next_states, rewards, dones, _ = self.env.step(actions)
             
             # Update episode tracking and handle data collection
             for i, (reward, done) in enumerate(zip(rewards, dones)):
-                reward_clipped = max(-1.0, min(reward.item(), 1.0))
+                reward_clipped = max(-1.0, min(float(reward), 1.0))
                 episode_rewards[i] += reward_clipped
                 episode_steps[i] += 1
 
@@ -448,11 +448,11 @@ class PacmanTrainer:
 
             # Store transitions in memory (batch operation)
             self.memory.cache_batch(
-                states_np,  # Already in numpy format
-                next_states.cpu().numpy(),
+                states,  # Already numpy arrays
+                next_states,
                 actions.cpu().numpy(),
-                rewards.cpu().numpy(),
-                dones.cpu().numpy()
+                rewards,
+                dones
             )
 
             states = next_states
