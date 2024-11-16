@@ -78,7 +78,13 @@ class PacmanAgent:
             return np.random.randint(n_actions)
         else:
             with torch.no_grad():
-                state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
+                if isinstance(state, torch.Tensor):
+                    if state.device != device:
+                        state = state.to(device)
+                    if len(state.shape) == 3:
+                        state = state.unsqueeze(0)
+                else:
+                    state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
                 return self.policy_net(state).max(1)[1].item()
 
     def optimize_model(self, memory, gamma=0.99, pellets_left=0):
