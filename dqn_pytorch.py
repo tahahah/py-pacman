@@ -481,7 +481,7 @@ class PacmanTrainer:
                                     f"image_env_{i}": wandb.Image(previous_frames[i]) if previous_frames[i] is not None else None,
                                 })
 
-                if episode_count % 1000 == 0:
+                if episode_count % 10000 == 0:
                     self.agent.save_model('pacman.pth')
                     logging.warning(f"Saved model at episode {episode_count}")
 
