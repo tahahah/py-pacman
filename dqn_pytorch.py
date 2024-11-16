@@ -374,6 +374,12 @@ class PacmanTrainer:
         while episode_count < self.episodes:
             epsilon = self._get_epsilon(episode_count)
             
+            # Log epsilon value
+            wandb.log({
+                "training/epsilon": epsilon,
+                "training/episode": episode_count
+            })
+            
             # Batch process states for action selection
             states_tensor = torch.stack([torch.tensor(state.__array__(), device=device) for state in states])
             
@@ -428,7 +434,8 @@ class PacmanTrainer:
                         f"env_{i}/episode": episode_count,
                         f"env_{i}/reward": episode_rewards[i],
                         f"env_{i}/pellets_left": pellets_left,
-                        f"env_{i}/steps": episode_steps[i]
+                        f"env_{i}/steps": episode_steps[i],
+                        f"env_{i}/epsilon": epsilon
                     })
                     
                     # Reset buffers and counters for this environment
