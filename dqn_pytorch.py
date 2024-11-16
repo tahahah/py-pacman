@@ -53,7 +53,7 @@ MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_v2"):
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_multienv"):
         self.policy_net = DQN(input_dim, output_dim).to(device)
         self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -62,10 +62,11 @@ class PacmanAgent:
         self.steps_done = 0
 
         # Try to load the model from Hugging Face if it exists
+        self.pretrained_model = "pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"
         self.model_name = model_name
         try:
             huggingface_hub.login(token=HF_TOKEN)
-            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
+            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.pretrained_model if self.pretrained_model else self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
             state_dict = torch.load(model_path, map_location=device)
             self.policy_net.load_state_dict(state_dict)
             self.target_net.load_state_dict(state_dict)
