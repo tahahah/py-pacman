@@ -47,7 +47,7 @@ USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
 logging.warning(f"CUDA available: {USE_CUDA}")
 
-Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
+Transition = namedtuple('Transition', ('state', 'next_state', 'action', 'reward', 'done'))
 
 MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
@@ -98,36 +98,41 @@ class PacmanAgent:
         if len(memory) < self.batch_size:
             return
 
-        # Sample a batch of transitions
-        transitions = memory.sample(self.batch_size)
-        batch = Transition(*zip(*transitions))
-
-        state_batch = torch.tensor(np.array(batch.state), dtype=torch.float32, device=device)
-        action_batch = torch.tensor(batch.action, device=device)
-        reward_batch = torch.tensor(batch.reward, device=device)
-        next_state_batch = torch.tensor(np.array(batch.next_state), dtype=torch.float32, device=device)
-        done_batch = torch.tensor(batch.done, device=device)
+        # Sample a batch of transitions using prioritized replay
+        state, next_state, action, reward, done, indices, weights = memory.sample(self.batch_size)
+        
+        # Convert to tensors and move to device
+        state = torch.tensor(state, device=device, dtype=torch.float32)
+        next_state = torch.tensor(next_state, device=device, dtype=torch.float32)
+        action = torch.tensor(action, device=device, dtype=torch.long)
+        reward = torch.tensor(reward, device=device, dtype=torch.float32)
+        done = torch.tensor(done, device=device, dtype=torch.float32)
+        weights = torch.tensor(weights, device=device, dtype=torch.float32)
 
         # Compute Q(s_t, a) - the model computes Q(s_t), then we select the columns of actions taken
-        state_action_values = self.policy_net(state_batch).gather(1, action_batch.unsqueeze(-1))
+        state_action_values = self.policy_net(state).gather(1, action.unsqueeze(-1))
 
         # Compute V(s_{t+1}) for all next states.
-        next_state_values = torch.zeros(self.batch_size, device=device)
         with torch.no_grad():
-            next_state_values[~done_batch] = self.target_net(next_state_batch[~done_batch]).max(1)[0]
+            next_state_values = self.target_net(next_state).max(1)[0]
+            next_state_values[done.bool()] = 0.0
+            expected_state_action_values = (next_state_values * gamma) + reward
 
-        # Compute the expected Q values
-        expected_state_action_values = (next_state_values * gamma) + reward_batch
-
+        # Compute TD errors for priority updating
+        td_errors = torch.abs(state_action_values.squeeze() - expected_state_action_values).detach()
+        
         # Compute Huber loss
-        criterion = nn.SmoothL1Loss()
-        loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+        criterion = nn.SmoothL1Loss(reduction='none')
+        loss = (weights * criterion(state_action_values.squeeze(), expected_state_action_values)).mean()
 
         # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
+
+        # Update priorities in replay buffer
+        memory.update_priorities(indices, td_errors.cpu().numpy())
         
         return loss
 
@@ -490,13 +495,19 @@ class PacmanTrainer:
                     episode_steps[i] = 0
                     episode_count += 1
 
-            # Store transitions in memory (batch operation)
+            # Cache batch experience
+            states_np = states.cpu().numpy()
+            next_states_np = next_states
+            actions_np = actions.cpu().numpy()
+            rewards_np = rewards
+            dones_np = dones
+            
             self.memory.cache_batch(
-                states,  # Already numpy arrays
-                next_states,
-                actions.cpu().numpy(),
-                rewards,
-                dones
+                states_np,
+                next_states_np,
+                actions_np,
+                rewards_np,
+                dones_np
             )
 
             states = next_states
