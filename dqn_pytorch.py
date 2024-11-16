@@ -232,9 +232,7 @@ class VectorizedPacmanEnv:
             
             # Track pellet changes
             current_pellets = env.maze.get_number_of_pellets()
-            info['pellets_eaten'] = self.game_states[i]['pellets'] - current_pellets
             info['current_pellets'] = current_pellets
-            info['pellets_left'] = current_pellets
             
             if done:
                 next_state = env.reset(mode='rgb_array')
@@ -452,15 +450,13 @@ class PacmanTrainer:
                 
                 if done:
                     pellets_left = info['current_pellets']
-                    pellets_eaten = info['pellets_eaten']
-                    logging.warning(f"Episode #{episode_count} finished after {episode_steps[i]} timesteps with total reward: {episode_rewards[i]}, pellets eaten: {pellets_eaten}, and {pellets_left} pellets left.")
+                    logging.warning(f"Episode #{episode_count} finished after {episode_steps[i]} timesteps with total reward: {episode_rewards[i]} and {pellets_left} pellets left.")
                     
                     # Log metrics
                     wandb.log({
                         f"env_{i}/episode": episode_count,
                         f"env_{i}/reward": episode_rewards[i],
                         f"env_{i}/pellets_left": pellets_left,
-                        f"env_{i}/pellets_eaten": pellets_eaten,
                         f"env_{i}/epsilon": epsilon
                     })
                     
