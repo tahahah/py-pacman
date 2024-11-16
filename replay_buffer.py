@@ -62,6 +62,31 @@ class ReplayBuffer:
         self.priorities[self.position] = max_priority
         self.position = (self.position + 1) % self.capacity
 
+    def cache_batch(self, states, next_states, actions, rewards, dones):
+        """Store a batch of experiences in the buffer."""
+        max_priority = self.priorities.max() if self.buffer else 1.0
+        
+        for i in range(len(states)):
+            if len(self.buffer) < self.capacity:
+                self.buffer.append((
+                    states[i],
+                    next_states[i],
+                    actions[i],
+                    rewards[i],
+                    dones[i]
+                ))
+            else:
+                self.buffer[self.position] = (
+                    states[i],
+                    next_states[i],
+                    actions[i],
+                    rewards[i],
+                    dones[i]
+                )
+            
+            self.priorities[self.position] = max_priority
+            self.position = (self.position + 1) % self.capacity
+
     def sample(self, batch_size, beta=0.4):
         if len(self.buffer) == self.capacity:
             priorities = self.priorities
