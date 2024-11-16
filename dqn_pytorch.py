@@ -78,13 +78,7 @@ class PacmanAgent:
             return np.random.randint(n_actions)
         else:
             with torch.no_grad():
-                if isinstance(state, torch.Tensor):
-                    if state.device != device:
-                        state = state.to(device)
-                    if len(state.shape) == 3:
-                        state = state.unsqueeze(0)
-                else:
-                    state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
+                state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
                 return self.policy_net(state).max(1)[1].item()
 
     def optimize_model(self, memory, gamma=0.99, pellets_left=0):
@@ -190,8 +184,7 @@ class VectorizedPacmanEnv:
         self.num_envs = num_envs
         self.envs = []
         self.base_envs = []  # Store base envs for rendering
-        logging.warning(f"Initializing {num_envs} parallel environments")
-        for i in range(num_envs):
+        for _ in range(num_envs):
             env = PacmanEnv(layout=layout)
             # Store base env before wrapping
             base_env = env
@@ -204,10 +197,6 @@ class VectorizedPacmanEnv:
             env = ResizeObservation(env, shape=84)
             env = FrameStack(env, num_stack=4)
             self.envs.append(env)
-            # Inside the for loop, after the line "for i in range(num_envs):"
-            logging.warning(f"Creating environment {i+1}/{num_envs}")
-            # After the for loop
-        logging.warning(f"Successfully initialized {num_envs} environments")
         
         self.action_space = self.envs[0].action_space
         self.observation_space = self.envs[0].observation_space
@@ -221,13 +210,14 @@ class VectorizedPacmanEnv:
 
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[dict]]:
         next_states, rewards, dones, infos = [], [], [], []
-        for i, (env, action) in enumerate(zip(self.envs, actions), 1):
-            # logging.warning(f"Stepping environment {i}/{self.num_envs}")
-
+        
+        for env, action in zip(self.envs, actions):
             next_state, reward, done, info = env.step(action.item())
             if done:
-                # logging.warning(f"Environment {i} episode complete, resetting")
+                # Properly reset the environment and get initial state
                 next_state = env.reset(mode='rgb_array')
+                # Update maze state
+                env.maze.reinit_map()
             next_states.append(next_state)
             rewards.append(reward)
             dones.append(done)
@@ -384,14 +374,17 @@ class PacmanTrainer:
         while episode_count < self.episodes:
             epsilon = self._get_epsilon(episode_count)
             
-            # Get actions for all environments
-            actions = []
-            for state in states:
-                action = self.agent.select_action(state, epsilon, n_actions)
-                actions.append(action)
-            actions = torch.tensor(actions, device=device)
+            # Batch process states for action selection
+            states_tensor = torch.stack([torch.tensor(state.__array__(), device=device) for state in states])
             
-            # Get current frame for video logging (from first env)
+            # Get actions for all environments in parallel
+            with torch.no_grad():
+                if np.random.rand() < epsilon:
+                    actions = torch.randint(0, n_actions, (self.num_envs,), device=device)
+                else:
+                    actions = self.agent.policy_net(states_tensor).max(1)[1]
+            
+            # Get current frame for video logging
             if self.log_video_to_wandb:
                 try:
                     for i in range(self.num_envs):
@@ -432,9 +425,10 @@ class PacmanTrainer:
                     
                     # Log metrics
                     wandb.log({
-                        "episode": episode_count,
-                        "reward": episode_rewards[i],
-                        "pellets_left": pellets_left
+                        f"env_{i}/episode": episode_count,
+                        f"env_{i}/reward": episode_rewards[i],
+                        f"env_{i}/pellets_left": pellets_left,
+                        f"env_{i}/steps": episode_steps[i]
                     })
                     
                     # Reset buffers and counters for this environment
@@ -444,15 +438,14 @@ class PacmanTrainer:
                     episode_steps[i] = 0
                     episode_count += 1
 
-            # Store transitions in memory
-            for i in range(self.num_envs):
-                self.memory.cache(
-                    states[i].cpu().numpy(),
-                    next_states[i].cpu().numpy(),
-                    actions[i].item(),
-                    rewards[i].item(),
-                    dones[i].item()
-                )
+            # Store transitions in memory (batch operation)
+            self.memory.cache_batch(
+                states_tensor.cpu().numpy(),
+                next_states.cpu().numpy(),
+                actions.cpu().numpy(),
+                rewards.cpu().numpy(),
+                dones.cpu().numpy()
+            )
 
             states = next_states
 
@@ -487,7 +480,7 @@ class PacmanTrainer:
                                     f"image_env_{i}": wandb.Image(previous_frames[i]) if previous_frames[i] is not None else None,
                                 })
 
-                if episode_count % 10000 == 0:
+                if episode_count % 1000 == 0:
                     self.agent.save_model('pacman.pth')
                     logging.warning(f"Saved model at episode {episode_count}")
 
