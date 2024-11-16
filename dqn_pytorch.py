@@ -60,6 +60,7 @@ class PacmanAgent:
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00004, eps=1.5e-4)
         self.steps_done = 0
+        self.batch_size = 32
 
         # Try to load the model from Hugging Face if it exists
         self.pretrained_model = "pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"
@@ -74,51 +75,62 @@ class PacmanAgent:
         except Exception as e:
             logging.warning(f"Could not load model from Hugging Face: {e}")
 
-    def select_action(self, state, epsilon, n_actions):
-        if np.random.rand() < epsilon:
-            return np.random.randint(n_actions)
-        else:
-            with torch.no_grad():
-                state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
-                return self.policy_net(state).max(1)[1].item()
+    def select_actions_batch(self, states_batch: torch.Tensor, epsilon: float, n_actions: int) -> torch.Tensor:
+        """Select actions for a batch of states"""
+        batch_size = states_batch.size(0)
+        actions = torch.empty(batch_size, device=device, dtype=torch.long)
+        
+        # For exploration
+        random_mask = torch.rand(batch_size, device=device) < epsilon
+        random_actions = torch.randint(0, n_actions, (batch_size,), device=device)
+        
+        # For exploitation
+        with torch.no_grad():
+            policy_actions = self.policy_net(states_batch).max(1)[1]
+        
+        # Combine random and policy actions
+        actions[random_mask] = random_actions[random_mask]
+        actions[~random_mask] = policy_actions[~random_mask]
+        
+        return actions
 
-    def optimize_model(self, memory, gamma=0.99, pellets_left=0):
-
-        if len(memory) < 32:  # Ensure there are enough samples in the memory
+    def optimize_model(self, memory, gamma=0.99):
+        if len(memory) < self.batch_size:
             return
 
-        state, next_state, action, reward, done, indices, weights = memory.sample(32)
-        
-        state = torch.tensor(state, device=device, dtype=torch.float32)
-        next_state = torch.tensor(next_state, device=device, dtype=torch.float32)
-        action = torch.tensor(action, device=device, dtype=torch.long)
-        reward = torch.tensor(reward, device=device, dtype=torch.float32)
-        done = torch.tensor(done, device=device, dtype=torch.float32)
-        weights = torch.tensor(weights, device=device, dtype=torch.float32)
+        # Sample a batch of transitions
+        transitions = memory.sample(self.batch_size)
+        batch = Transition(*zip(*transitions))
 
-        state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1)).squeeze(1)
-        
+        state_batch = torch.tensor(np.array(batch.state), dtype=torch.float32, device=device)
+        action_batch = torch.tensor(batch.action, device=device)
+        reward_batch = torch.tensor(batch.reward, device=device)
+        next_state_batch = torch.tensor(np.array(batch.next_state), dtype=torch.float32, device=device)
+        done_batch = torch.tensor(batch.done, device=device)
+
+        # Compute Q(s_t, a) - the model computes Q(s_t), then we select the columns of actions taken
+        state_action_values = self.policy_net(state_batch).gather(1, action_batch.unsqueeze(-1))
+
+        # Compute V(s_{t+1}) for all next states.
+        next_state_values = torch.zeros(self.batch_size, device=device)
         with torch.no_grad():
-            next_actions = self.policy_net(next_state).max(1)[1]
-            next_state_values = self.target_net(next_state).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            next_state_values[done.bool()] = 0.0  # Convert done to boolean tensor
-            expected_state_action_values = (next_state_values * gamma) + reward
-            
-        # Calculate TD errors for priority updating
-        td_errors = torch.abs(state_action_values - expected_state_action_values).detach()
-        
-        # Calculate weighted loss
-        loss = (weights * F.smooth_l1_loss(state_action_values, expected_state_action_values, reduction='none')).mean()
-        wandb.log({"loss": loss})
-        
-        self.optimizer.zero_grad()  # Zero the gradients
-        loss.backward()  # Backpropagation
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)  # Clip gradients
-        self.optimizer.step()  # Update the model parameters
+            next_state_values[~done_batch] = self.target_net(next_state_batch[~done_batch]).max(1)[0]
 
-        # Update priorities in the replay buffer
-        memory.update_priorities(indices, td_errors.cpu().numpy())
+        # Compute the expected Q values
+        expected_state_action_values = (next_state_values * gamma) + reward_batch
+
+        # Compute Huber loss
+        criterion = nn.SmoothL1Loss()
+        loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+
+        # Optimize the model
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+        self.optimizer.step()
         
+        return loss
+
     def update_target_network(self):
         # Soft update of target network
         tau = 0.005
@@ -405,6 +417,9 @@ class PacmanTrainer:
         episode_count = 0
         previous_frames = [None] * self.num_envs
 
+        # Enable automatic mixed precision
+        scaler = torch.cuda.amp.GradScaler()
+
         while episode_count < self.episodes:
             epsilon = self._get_epsilon(episode_count)
             
@@ -414,15 +429,12 @@ class PacmanTrainer:
                 "training/episode": episode_count
             })
             
-            # Convert numpy states to tensor for network
+            # Process all states in a single batch
             states_tensor = torch.tensor(states, device=device, dtype=torch.float32)
             
             # Get actions for all environments in parallel
-            with torch.no_grad():
-                if np.random.rand() < epsilon:
-                    actions = torch.randint(0, n_actions, (self.num_envs,), device=device)
-                else:
-                    actions = self.agent.policy_net(states_tensor).max(1)[1]
+            with torch.cuda.amp.autocast():
+                actions = self.agent.select_actions_batch(states_tensor, epsilon, n_actions)
             
             # Get current frame for video logging
             if self.log_video_to_wandb:
@@ -491,7 +503,10 @@ class PacmanTrainer:
 
             # Optimize model more frequently with parallel environments
             if len(self.memory) >= 32 * self.num_envs:
-                self.agent.optimize_model(self.memory)
+                loss = self.agent.optimize_model(self.memory)
+                scaler.scale(loss).backward()
+                scaler.step(self.agent.optimizer)
+                scaler.update()
 
             # Update target network and save model
             if episode_count > 2:
