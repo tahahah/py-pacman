@@ -243,8 +243,7 @@ class VectorizedPacmanEnv:
                     'score': env.game.score,
                     'total_rewards': env.game.total_rewards,
                     'pellets': env.maze.get_number_of_pellets(),
-                    'episode_reward': env.game.total_rewards,
-                    'episode_steps': env.game.episode_steps
+                    'episode_reward': env.game.total_rewards
                 }
             else:
                 # Update game state tracking
@@ -252,8 +251,7 @@ class VectorizedPacmanEnv:
                     'score': env.game.score,
                     'total_rewards': env.game.total_rewards,
                     'pellets': current_pellets,
-                    'episode_reward': env.game.total_rewards,
-                    'episode_steps': env.game.episode_steps
+                    'episode_reward': env.game.total_rewards
                 }
             
             next_states.append(next_state)
@@ -463,7 +461,6 @@ class PacmanTrainer:
                         f"env_{i}/reward": episode_rewards[i],
                         f"env_{i}/pellets_left": pellets_left,
                         f"env_{i}/pellets_eaten": pellets_eaten,
-                        f"env_{i}/steps": episode_steps[i],
                         f"env_{i}/epsilon": epsilon
                     })
                     
