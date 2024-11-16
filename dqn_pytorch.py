@@ -185,6 +185,7 @@ class VectorizedPacmanEnv:
         self.num_envs = num_envs
         self.envs = []
         self.base_envs = []  # Store base envs for rendering
+        self.game_states = [None] * num_envs  # Track game states
         for _ in range(num_envs):
             env = PacmanEnv(layout=layout)
             # Store base env before wrapping
@@ -201,32 +202,67 @@ class VectorizedPacmanEnv:
         
         self.action_space = self.envs[0].action_space
         self.observation_space = self.envs[0].observation_space
-
+        
+        # Initialize game states
+        for i, env in enumerate(self.envs):
+            self.game_states[i] = {
+                'score': env.game.score,
+                'total_rewards': env.game.total_rewards,
+                'pellets': env.maze.get_number_of_pellets()
+            }
+        
     def reset(self) -> np.ndarray:
         states = []
-        for env in self.envs:
+        for i, env in enumerate(self.envs):
             state = env.reset(mode='rgb_array')
+            # Update initial game state
+            self.game_states[i] = {
+                'score': env.game.score,
+                'total_rewards': env.game.total_rewards,
+                'pellets': env.maze.get_number_of_pellets()
+            }
             states.append(state)
-        states_np = np.array(states)
-        return states_np  # Return numpy array instead of tensor
+        return np.array(states)
 
     def step(self, actions: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[dict]]:
         next_states, rewards, dones, infos = [], [], [], []
         
-        for env, action in zip(self.envs, actions):
+        for i, (env, action) in enumerate(zip(self.envs, actions)):
             next_state, reward, done, info = env.step(action.item())
+            
+            # Track pellet changes
+            current_pellets = env.maze.get_number_of_pellets()
+            info['pellets_eaten'] = self.game_states[i]['pellets'] - current_pellets
+            info['current_pellets'] = current_pellets
+            info['pellets_left'] = current_pellets
+            
             if done:
-                # Properly reset the environment and get initial state
                 next_state = env.reset(mode='rgb_array')
-                # Update maze state
-                env.maze.reinit_map()
+                # Reset game state tracking
+                self.game_states[i] = {
+                    'score': env.game.score,
+                    'total_rewards': env.game.total_rewards,
+                    'pellets': env.maze.get_number_of_pellets(),
+                    'episode_reward': env.game.total_rewards,
+                    'episode_steps': env.game.episode_steps
+                }
+            else:
+                # Update game state tracking
+                self.game_states[i] = {
+                    'score': env.game.score,
+                    'total_rewards': env.game.total_rewards,
+                    'pellets': current_pellets,
+                    'episode_reward': env.game.total_rewards,
+                    'episode_steps': env.game.episode_steps
+                }
+            
             next_states.append(next_state)
             rewards.append(reward)
             dones.append(done)
             infos.append(info)
         
         return (
-            np.array(next_states),  # Return numpy arrays instead of tensors
+            np.array(next_states),
             np.array(rewards),
             np.array(dones),
             infos
@@ -402,10 +438,10 @@ class PacmanTrainer:
                     pass
 
             # Step all environments (now returns numpy arrays)
-            next_states, rewards, dones, _ = self.env.step(actions)
+            next_states, rewards, dones, infos = self.env.step(actions)
             
             # Update episode tracking and handle data collection
-            for i, (reward, done) in enumerate(zip(rewards, dones)):
+            for i, (reward, done, info) in enumerate(zip(rewards, dones, infos)):
                 reward_clipped = max(-1.0, min(float(reward), 1.0))
                 episode_rewards[i] += reward_clipped
                 episode_steps[i] += 1
@@ -417,8 +453,19 @@ class PacmanTrainer:
                     actions_buffers[i].append(self.action_encoder(actions[i].item()))
                 
                 if done:
-                    pellets_left = self.env.get_number_of_pellets()[i]
-                    logging.warning(f"Episode #{episode_count} finished after {episode_steps[i]} timesteps with total reward: {episode_rewards[i]} and {pellets_left} pellets left.")
+                    pellets_left = info['current_pellets']
+                    pellets_eaten = info['pellets_eaten']
+                    logging.warning(f"Episode #{episode_count} finished after {episode_steps[i]} timesteps with total reward: {episode_rewards[i]}, pellets eaten: {pellets_eaten}, and {pellets_left} pellets left.")
+                    
+                    # Log metrics
+                    wandb.log({
+                        f"env_{i}/episode": episode_count,
+                        f"env_{i}/reward": episode_rewards[i],
+                        f"env_{i}/pellets_left": pellets_left,
+                        f"env_{i}/pellets_eaten": pellets_eaten,
+                        f"env_{i}/steps": episode_steps[i],
+                        f"env_{i}/epsilon": epsilon
+                    })
                     
                     # Handle data storage for completed episode
                     if self.save_locally:
@@ -430,15 +477,6 @@ class PacmanTrainer:
                         if buffer_size >= max_batch_size:
                             logging.warning("BUFFER SIZE EXCEEDING 500MB")
                         self._save_data_to_redis(episode_count, frames_buffers[i], actions_buffers[i])
-                    
-                    # Log metrics
-                    wandb.log({
-                        f"env_{i}/episode": episode_count,
-                        f"env_{i}/reward": episode_rewards[i],
-                        f"env_{i}/pellets_left": pellets_left,
-                        f"env_{i}/steps": episode_steps[i],
-                        f"env_{i}/epsilon": epsilon
-                    })
                     
                     # Reset buffers and counters for this environment
                     frames_buffers[i] = []
