@@ -109,6 +109,9 @@ class PacmanAgent:
         done = torch.tensor(done, device=device, dtype=torch.float32)
         weights = torch.tensor(weights, device=device, dtype=torch.float32)
 
+        # Zero gradients
+        self.optimizer.zero_grad()
+
         # Compute Q(s_t, a) - the model computes Q(s_t), then we select the columns of actions taken
         state_action_values = self.policy_net(state).gather(1, action.unsqueeze(-1))
 
@@ -124,12 +127,6 @@ class PacmanAgent:
         # Compute Huber loss
         criterion = nn.SmoothL1Loss(reduction='none')
         loss = (weights * criterion(state_action_values.squeeze(), expected_state_action_values)).mean()
-
-        # Optimize the model
-        self.optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
-        self.optimizer.step()
 
         # Update priorities in replay buffer
         memory.update_priorities(indices, td_errors.cpu().numpy())
@@ -408,7 +405,7 @@ class PacmanTrainer:
         if self.enable_rmq:
             self._setup_rabbitmq()
         
-        states = self.env.reset()  # Now returns numpy array
+        states = self.env.reset()
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(states[0].shape, n_actions)
@@ -423,7 +420,7 @@ class PacmanTrainer:
         previous_frames = [None] * self.num_envs
 
         # Enable automatic mixed precision
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.amp.GradScaler('cuda')
 
         while episode_count < self.episodes:
             epsilon = self._get_epsilon(episode_count)
@@ -434,15 +431,15 @@ class PacmanTrainer:
                 "training/episode": episode_count
             })
             
-            # Process all states in a single batch
+            # Convert states to tensor once
             states_tensor = torch.tensor(states, device=device, dtype=torch.float32)
             
             # Get actions for all environments in parallel
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 actions = self.agent.select_actions_batch(states_tensor, epsilon, n_actions)
             
             # Get current frame for video logging
-            if self.log_video_to_wandb:
+            if self.log_video_to_wandb and episode_count % 2000 == 0:
                 try:
                     for i in range(self.num_envs):
                         current_frame = self.env.render(mode='rgb_array', env_idx=i)
@@ -453,7 +450,16 @@ class PacmanTrainer:
             # Step all environments (now returns numpy arrays)
             next_states, rewards, dones, infos = self.env.step(actions)
             
-            # Update episode tracking and handle data collection
+            # Cache experience in replay buffer
+            self.memory.cache_batch(
+                states,  # Already numpy
+                next_states,  # Already numpy
+                actions.cpu().numpy(),
+                rewards,  # Already numpy
+                dones  # Already numpy
+            )
+
+            # Update episode tracking
             for i, (reward, done, info) in enumerate(zip(rewards, dones, infos)):
                 reward_clipped = max(-1.0, min(float(reward), 1.0))
                 episode_rewards[i] += reward_clipped
@@ -464,12 +470,11 @@ class PacmanTrainer:
                     current_frame = self.env.render(mode='rgb_array', env_idx=i)
                     frames_buffers[i].append(current_frame)
                     actions_buffers[i].append(self.action_encoder(actions[i].item()))
-                
+
                 if done:
                     pellets_left = info['current_pellets']
                     logging.warning(f"Episode #{episode_count} finished after {episode_steps[i]} timesteps with total reward: {episode_rewards[i]} and {pellets_left} pellets left.")
                     
-                    # Log metrics
                     wandb.log({
                         f"env_{i}/episode": episode_count,
                         f"env_{i}/reward": episode_rewards[i],
@@ -495,56 +500,51 @@ class PacmanTrainer:
                     episode_steps[i] = 0
                     episode_count += 1
 
-            # Cache batch experience
-            states_np = states  # Already numpy array
-            next_states_np = next_states  # Already numpy array
-            actions_np = actions.cpu().numpy()
-            rewards_np = rewards  # Already numpy array
-            dones_np = dones  # Already numpy array
-            
-            self.memory.cache_batch(
-                states_np,
-                next_states_np,
-                actions_np,
-                rewards_np,
-                dones_np
-            )
-
             states = next_states
 
-            # Optimize model more frequently with parallel environments
+            # Optimize model
             if len(self.memory) >= 32 * self.num_envs:
-                loss = self.agent.optimize_model(self.memory)
+                # Compute loss with mixed precision
+                with torch.amp.autocast('cuda'):
+                    loss = self.agent.optimize_model(self.memory)
+                
+                # Scale loss and backprop
                 scaler.scale(loss).backward()
+                
+                # Unscale before gradient clipping
+                scaler.unscale_(self.agent.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.agent.policy_net.parameters(), max_norm=10.0)
+                
+                # Step optimizer and update scaler
                 scaler.step(self.agent.optimizer)
                 scaler.update()
 
-            # Update target network and save model
-            if episode_count > 2:
-                if episode_count % 100 == 0:
-                    self.agent.update_target_network()
-                    logging.warning(f"Updated target network at episode {episode_count}")
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                        logging.warning(torch.cuda.memory_summary())
-                    torch.autograd.set_detect_anomaly(True)
+            # Update target network periodically
+            if episode_count > 2 and episode_count % 100 == 0:
+                self.agent.update_target_network()
+                logging.warning(f"Updated target network at episode {episode_count}")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
-                if episode_count % 2000 == 0:
-                    # Log video every 2000 episodes for all environments
-                    if self.log_video_to_wandb:
-                        for i in range(self.num_envs):
-                            if len(frames_buffers[i]) > 0:
-                                frames = [np.array(frame).astype(np.uint8) for frame in frames_buffers[i]]
-                                if frames[0].max() <= 1.0:
-                                    frames = [frame * 255 for frame in frames]
-                                frames = np.stack(frames)
-                                frames = np.transpose(frames, (0, 3, 1, 2))
-                                logging.warning(f"Video frames shape for env {i}: {frames.shape}")
-                                video = wandb.Video(frames, fps=10, format="mp4")
-                                wandb.log({
-                                    f"video_env_{i}": video,
-                                    f"image_env_{i}": wandb.Image(previous_frames[i]) if previous_frames[i] is not None else None,
-                                })
+                # Save model periodically
+                if episode_count % 1000 == 0:
+                    self.agent.save_model('pacman.pth')
+
+            # Log video every 2000 episodes for all environments
+            if self.log_video_to_wandb and episode_count % 2000 == 0:
+                for i in range(self.num_envs):
+                    if len(frames_buffers[i]) > 0:
+                        frames = [np.array(frame).astype(np.uint8) for frame in frames_buffers[i]]
+                        if frames[0].max() <= 1.0:
+                            frames = [frame * 255 for frame in frames]
+                        frames = np.stack(frames)
+                        frames = np.transpose(frames, (0, 3, 1, 2))
+                        logging.warning(f"Video frames shape for env {i}: {frames.shape}")
+                        video = wandb.Video(frames, fps=10, format="mp4")
+                        wandb.log({
+                            f"video_env_{i}": video,
+                            f"image_env_{i}": wandb.Image(previous_frames[i]) if previous_frames[i] is not None else None,
+                        })
 
                 if episode_count % 1000 == 0:
                     self.agent.save_model('pacman.pth')
