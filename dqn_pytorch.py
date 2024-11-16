@@ -496,11 +496,11 @@ class PacmanTrainer:
                     episode_count += 1
 
             # Cache batch experience
-            states_np = states.cpu().numpy()
-            next_states_np = next_states
+            states_np = states  # Already numpy array
+            next_states_np = next_states  # Already numpy array
             actions_np = actions.cpu().numpy()
-            rewards_np = rewards
-            dones_np = dones
+            rewards_np = rewards  # Already numpy array
+            dones_np = dones  # Already numpy array
             
             self.memory.cache_batch(
                 states_np,
