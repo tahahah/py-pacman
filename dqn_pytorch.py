@@ -184,7 +184,8 @@ class VectorizedPacmanEnv:
         self.num_envs = num_envs
         self.envs = []
         self.base_envs = []  # Store base envs for rendering
-        for _ in range(num_envs):
+        logging.warning(f"Initializing {num_envs} parallel environments")
+        for i in range(num_envs):
             env = PacmanEnv(layout=layout)
             # Store base env before wrapping
             base_env = env
@@ -197,6 +198,10 @@ class VectorizedPacmanEnv:
             env = ResizeObservation(env, shape=84)
             env = FrameStack(env, num_stack=4)
             self.envs.append(env)
+            # Inside the for loop, after the line "for i in range(num_envs):"
+            logging.warning(f"Creating environment {i+1}/{num_envs}")
+            # After the for loop
+        logging.warning(f"Successfully initialized {num_envs} environments")
         
         self.action_space = self.envs[0].action_space
         self.observation_space = self.envs[0].observation_space
@@ -210,10 +215,12 @@ class VectorizedPacmanEnv:
 
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[dict]]:
         next_states, rewards, dones, infos = [], [], [], []
-        
-        for env, action in zip(self.envs, actions):
+        for i, (env, action) in enumerate(zip(self.envs, actions), 1):
+            logging.warning(f"Stepping environment {i}/{self.num_envs}")
+
             next_state, reward, done, info = env.step(action.item())
             if done:
+                logging.warning(f"Environment {i} episode complete, resetting")
                 next_state = env.reset(mode='rgb_array')
             next_states.append(next_state)
             rewards.append(reward)
