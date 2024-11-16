@@ -222,11 +222,11 @@ class VectorizedPacmanEnv:
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[dict]]:
         next_states, rewards, dones, infos = [], [], [], []
         for i, (env, action) in enumerate(zip(self.envs, actions), 1):
-            logging.warning(f"Stepping environment {i}/{self.num_envs}")
+            # logging.warning(f"Stepping environment {i}/{self.num_envs}")
 
             next_state, reward, done, info = env.step(action.item())
             if done:
-                logging.warning(f"Environment {i} episode complete, resetting")
+                # logging.warning(f"Environment {i} episode complete, resetting")
                 next_state = env.reset(mode='rgb_array')
             next_states.append(next_state)
             rewards.append(reward)
