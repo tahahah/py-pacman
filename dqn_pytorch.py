@@ -8,6 +8,7 @@ import os
 import pickle
 import queue
 import sys
+import time
 from collections import namedtuple
 from itertools import count
 from ActionEncoder import ActionEncoder
@@ -127,18 +128,40 @@ class PacmanAgent:
         # Save the model locally
         torch.save(self.policy_net.state_dict(), filename)
         
-        # Save the model to Hugging Face
+        # Save the model to Hugging Face with retries
         huggingface_hub.login(token=HF_TOKEN)
-
         repo_id = f"Tahahah/{self.model_name}"
-        try:
-            huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=repo_id, repo_type="model")
-        except huggingface_hub.utils.RepositoryNotFoundError:
-            huggingface_hub.create_repo(repo_id, repo_type="model")
-            huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=repo_id, repo_type="model")
 
-        logging.warning(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {self.model_name}")
-
+        max_retries = 5
+        base_delay = 1  # Start with 1 second delay
+        for attempt in range(max_retries):
+            try:
+                try:
+                    huggingface_hub.upload_file(
+                        path_or_fileobj=filename,
+                        path_in_repo=f"checkpoints/{filename}",
+                        repo_id=repo_id,
+                        repo_type="model"
+                    )
+                except huggingface_hub.utils.RepositoryNotFoundError:
+                    logging.warning(f"Repository {repo_id} not found. Creating it...")
+                    huggingface_hub.create_repo(repo_id, repo_type="model")
+                    huggingface_hub.upload_file(
+                        path_or_fileobj=filename,
+                        path_in_repo=f"checkpoints/{filename}",
+                        repo_id=repo_id,
+                        repo_type="model"
+                    )
+                logging.warning(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {self.model_name}")
+                break
+            except Exception as e:
+                delay = base_delay * (2 ** attempt)  # Exponential backoff
+                if attempt < max_retries - 1:
+                    logging.warning(f"Attempt {attempt + 1} failed to save model to HuggingFace: {str(e)}. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    logging.error(f"Failed to save model to HuggingFace after {max_retries} attempts: {str(e)}")
+                    
     @classmethod
     def load_model(cls, input_dim, output_dim, filename):
         agent = cls(input_dim, output_dim)
