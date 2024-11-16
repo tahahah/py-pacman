@@ -381,7 +381,8 @@ class PacmanTrainer:
             })
             
             # Batch process states for action selection
-            states_tensor = torch.stack([torch.tensor(state.__array__(), device=device) for state in states])
+            states_np = np.stack([state.__array__() for state in states])
+            states_tensor = torch.tensor(states_np, device=device, dtype=torch.float32)
             
             # Get actions for all environments in parallel
             with torch.no_grad():
@@ -447,7 +448,7 @@ class PacmanTrainer:
 
             # Store transitions in memory (batch operation)
             self.memory.cache_batch(
-                states_tensor.cpu().numpy(),
+                states_np,  # Already in numpy format
                 next_states.cpu().numpy(),
                 actions.cpu().numpy(),
                 rewards.cpu().numpy(),
