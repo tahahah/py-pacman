@@ -478,6 +478,7 @@ class PacmanTrainer:
             if episodes_finished > 0:
                 total_episodes += 1
                 
+            if total_episodes > 2:
                 # Save model periodically based on total episodes
                 if total_episodes % 1000 == 0:
                     self.agent.save_model('pacman.pth')
