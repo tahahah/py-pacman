@@ -416,19 +416,20 @@ class PacmanTrainer:
         max_batch_size = 500 * 1024 * 1024  # 400 MB
         episode_rewards = [0.0] * self.num_envs
         episode_steps = [0] * self.num_envs
-        episode_count = 0
+        episode_counts = [0] * self.num_envs  # Track episodes per environment
+        total_episodes = 0  # Track total episodes across all environments
         previous_frames = [None] * self.num_envs
 
         # Enable automatic mixed precision
         scaler = torch.amp.GradScaler('cuda')
 
-        while episode_count < self.episodes:
-            epsilon = self._get_epsilon(episode_count)
+        while total_episodes < self.episodes:
+            epsilon = self._get_epsilon(total_episodes)
             
             # Log epsilon value
             wandb.log({
                 "training/epsilon": epsilon,
-                "training/episode": episode_count
+                "training/episode": total_episodes
             })
             
             # Convert states to tensor once
@@ -442,54 +443,70 @@ class PacmanTrainer:
             next_states, rewards, dones, infos = self.env.step(actions)
             
             # Update episode tracking and handle data collection
+            episodes_finished = 0
             for i, (reward, done, info) in enumerate(zip(rewards, dones, infos)):
                 reward_clipped = max(-1.0, min(float(reward), 1.0))
                 episode_rewards[i] += reward_clipped
                 episode_steps[i] += 1
 
                 # Collect frames only if needed
-                if done or (self.log_video_to_wandb and episode_count % 2000 == 0):
+                if done or (self.log_video_to_wandb and total_episodes % 2000 == 0):
                     current_frame = self.env.render(mode='rgb_array', env_idx=i)
                     if done:
                         frames_buffers[i].append(current_frame)
                     else:
                         previous_frames[i] = current_frame
 
-                # Collect frames and actions for data storage
-                if self.enable_rmq or self.save_locally or (episode_count % 2000 == 0 and self.log_video_to_wandb):
-                    if not done:
-                        current_frame = self.env.render(mode='rgb_array', env_idx=i)
-                        frames_buffers[i].append(current_frame)
-                    actions_buffers[i].append(self.action_encoder(actions[i].item()))
-
                 if done:
                     pellets_left = info['current_pellets']
-                    logging.warning(f"Episode #{episode_count} finished after {episode_steps[i]} timesteps with total reward: {episode_rewards[i]} and {pellets_left} pellets left.")
+                    episode_counts[i] += 1
+                    episodes_finished += 1
+                    logging.warning(f"Environment #{i} finished episode #{episode_counts[i]} after {episode_steps[i]} timesteps with total reward: {episode_rewards[i]} and {pellets_left} pellets left.")
                     
                     wandb.log({
-                        f"env_{i}/episode": episode_count,
+                        f"env_{i}/episode": episode_counts[i],
                         f"env_{i}/reward": episode_rewards[i],
                         f"env_{i}/pellets_left": pellets_left,
                         f"env_{i}/epsilon": epsilon
                     })
                     
-                    # Handle data storage for completed episode
-                    if self.save_locally:
-                        self._save_frames_locally(frames=frames_buffers[i], episode=episode_count, actions=actions_buffers[i])
-                    
-                    if self.enable_rmq:
-                        buffer_size = self._get_buffer_size(frames_buffers[i], actions_buffers[i])
-                        logging.warning(f"Buffer size: {buffer_size} bytes")
-                        if buffer_size >= max_batch_size:
-                            logging.warning("BUFFER SIZE EXCEEDING 500MB")
-                        self._save_data_to_redis(episode_count, frames_buffers[i], actions_buffers[i])
-                    
-                    # Reset buffers and counters for this environment
-                    frames_buffers[i] = []
-                    actions_buffers[i] = []
+                    # Reset counters for this environment
                     episode_rewards[i] = 0.0
                     episode_steps[i] = 0
-                    episode_count += 1
+            
+            # Update total episodes only after all environments are processed
+            if episodes_finished > 0:
+                total_episodes += 1
+                
+                # Save model periodically based on total episodes
+                if total_episodes % 1000 == 0:
+                    self.agent.save_model('pacman.pth')
+                    logging.warning(f"Saved model at total episode {total_episodes}")
+
+                # Log video periodically based on total episodes
+                if self.log_video_to_wandb and total_episodes % 2000 == 0:
+                    for i in range(self.num_envs):
+                        if len(frames_buffers[i]) > 0:
+                            frames = [np.array(frame).astype(np.uint8) for frame in frames_buffers[i]]
+                            if frames[0].max() <= 1.0:
+                                frames = [frame * 255 for frame in frames]
+                            frames = np.stack(frames)
+                            frames = np.transpose(frames, (0, 3, 1, 2))
+                            video = wandb.Video(frames, fps=10, format="mp4")
+                            wandb.log({
+                                f"video_env_{i}": video,
+                                f"image_env_{i}": wandb.Image(previous_frames[i]) if previous_frames[i] is not None else None,
+                            })
+                            frames_buffers[i] = []  # Clear buffer after logging
+
+            # Cache experience in replay buffer
+            self.memory.cache_batch(
+                states,  # Already numpy
+                next_states,  # Already numpy
+                actions.cpu().numpy(),
+                rewards,  # Already numpy
+                dones  # Already numpy
+            )
 
             states = next_states
 
@@ -511,32 +528,11 @@ class PacmanTrainer:
                 scaler.update()
 
             # Update target network periodically
-            if episode_count > 2 and episode_count % 100 == 0:
+            if total_episodes > 2 and total_episodes % 100 == 0:
                 self.agent.update_target_network()
-                logging.warning(f"Updated target network at episode {episode_count}")
+                logging.warning(f"Updated target network at total episode {total_episodes}")
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-
-            # Save model periodically
-            if episode_count % 1000 == 0:
-                self.agent.save_model('pacman.pth')
-                logging.warning(f"Saved model at episode {episode_count}")
-
-            # Log video every 2000 episodes for all environments
-            if self.log_video_to_wandb and episode_count > 0 and episode_count % 2000 == 0:
-                # Only log video if we have frames
-                for i in range(self.num_envs):
-                    if len(frames_buffers[i]) > 0:
-                        frames = [np.array(frame).astype(np.uint8) for frame in frames_buffers[i]]
-                        if frames[0].max() <= 1.0:
-                            frames = [frame * 255 for frame in frames]
-                        frames = np.stack(frames)
-                        frames = np.transpose(frames, (0, 3, 1, 2))
-                        video = wandb.Video(frames, fps=10, format="mp4")
-                        wandb.log({
-                            f"video_env_{i}": video,
-                            f"image_env_{i}": wandb.Image(previous_frames[i]) if previous_frames[i] is not None else None,
-                        })
 
         logging.warning('Training Complete')
         self.env.close()
