@@ -477,12 +477,31 @@ class PacmanTrainer:
             # Update total episodes only after all environments are processed
             if episodes_finished > 0:
                 total_episodes += 1
+
+                # Calculate and log averages across all environments
+                avg_reward = sum(episode_rewards) / self.num_envs
+                avg_steps = sum(episode_steps) / self.num_envs
+                avg_pellets_left = sum(info['current_pellets'] for info in infos) / self.num_envs
+                avg_episode_count = sum(episode_counts) / self.num_envs
                 
+                wandb.log({
+                    "training/avg_reward": avg_reward,
+                    "training/avg_steps": avg_steps,
+                    "training/avg_pellets_left": avg_pellets_left,
+                    "training/avg_episode": avg_episode_count,
+                    "training/total_episodes": total_episodes,
+                    "training/active_envs": sum(1 for r in episode_rewards if r > 0),  # Number of active environments
+                    "training/episodes_finished": episodes_finished
+                })
+            
             if total_episodes > 2:
                 # Save model periodically based on total episodes
                 if total_episodes % 1000 == 0:
                     self.agent.save_model('pacman.pth')
                     logging.warning(f"Saved model at total episode {total_episodes}")
+                
+                if total_episodes % 100 == 0:
+                    logging.warning(f"--------------- Total epsodes: {total_episodes}")
 
                 # Log video periodically based on total episodes
                 if self.log_video_to_wandb and total_episodes % 2000 == 0:
