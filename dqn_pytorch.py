@@ -301,7 +301,7 @@ class PacmanTrainer:
             logging.warning(f"Starting episode {i_episode} with epsilon {epsilon}")
             
             # Log neural network input visualization at the start of each episode
-            if i_episode % 5 == 0:  # Log every 5 episodes
+            if i_episode % 1000 == 0:  # Log every 5 episodes
                 nn_input_vis = get_nn_input_visualization(self.env, state)
                 wandb.log({
                     "nn_input": wandb.Image(nn_input_vis, caption=f"Neural Network Input (Episode {i_episode})")
