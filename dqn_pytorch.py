@@ -74,7 +74,6 @@ class PacmanAgent:
             logging.warning(f"Could not load model from Hugging Face: {e}")
 
     def select_action(self, state, epsilon, n_actions):
-        logging.warning(f"Current epsilon: {epsilon}")
         if np.random.rand() < epsilon:
             return np.random.randint(n_actions)
         else:
