@@ -301,6 +301,13 @@ class PacmanTrainer:
             logging.warning("-----------------------------------------------------")
             logging.warning(f"Starting episode {i_episode} with epsilon {epsilon}")
             
+            # Log neural network input visualization at the start of each episode
+            if i_episode % 5 == 0:  # Log every 5 episodes
+                nn_input_vis = get_nn_input_visualization(self.env, state)
+                wandb.log({
+                    "nn_input": wandb.Image(nn_input_vis, caption=f"Neural Network Input (Episode {i_episode})")
+                })
+            
             for t in count():
                 try:
                     previous_frame = current_frame
@@ -478,6 +485,70 @@ class PacmanRunner:
 
                 if done:
                     break
+
+def get_nn_input_visualization(env, state):
+    """
+    Create a visualization of the neural network input state.
+    
+    Args:
+        env: The wrapped environment
+        state: The current state
+        
+    Returns:
+        A numpy array of the visualization
+    """
+    import matplotlib.pyplot as plt
+    import io
+    import numpy as np
+    from PIL import Image
+    
+    # Get the base environment and processed state
+    base_env = env
+    processed_state = state
+    
+    # If it's a tensor, convert to numpy
+    if isinstance(processed_state, torch.Tensor):
+        processed_state = processed_state.cpu().numpy()
+    
+    # If using frame stacking (shape is [4,84,84]), take most recent frame
+    if len(processed_state.shape) == 3 and processed_state.shape[0] == 4:
+        processed_state = processed_state[0]
+    
+    # Create a figure with two subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    
+    # Get raw game screen from base environment
+    while hasattr(base_env, 'env'):
+        if isinstance(base_env, PacmanEnv):
+            raw_screen = base_env.get_screen_rgb_array()
+            break
+        base_env = base_env.env
+    
+    # Plot original game screen
+    ax1.imshow(raw_screen)
+    ax1.set_title('Game Screen')
+    ax1.axis('off')
+    
+    # Plot neural network input
+    ax2.imshow(processed_state, cmap='gray')
+    ax2.set_title('Neural Network Input (84x84)')
+    ax2.axis('off')
+    
+    # Add a main title
+    plt.suptitle(f'Input Processing Pipeline\nShape: {processed_state.shape}, Range: [{processed_state.min():.1f}, {processed_state.max():.1f}]')
+    
+    # Save plot to a numpy array
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    
+    # Convert to numpy array
+    img_arr = np.array(Image.open(buf))
+    buf.close()
+    
+    return img_arr
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Argument for the agent that interacts with the sm env')
