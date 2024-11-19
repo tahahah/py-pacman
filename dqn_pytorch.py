@@ -52,7 +52,7 @@ MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_recreate"):
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_128"):
         self.policy_net = DQN(input_dim, output_dim).to(device)
         self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -61,7 +61,7 @@ class PacmanAgent:
         self.steps_done = 0
 
         # Try to load the model from Hugging Face if it exists
-        self.pretrained_model = "pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"
+        self.pretrained_model = None #"pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"
         self.model_name = model_name
         try:
             huggingface_hub.login(token=HF_TOKEN)
@@ -178,7 +178,7 @@ class PacmanTrainer:
         env = PacmanEnv(layout=self.layout)
         env = SkipFrame(env, skip=self.frames_to_skip)
         env = GrayScaleObservation(env)
-        env = ResizeObservation(env, shape=84)
+        env = ResizeObservation(env, shape=128)  # Changed from 84 to 128
         env = FrameStack(env, num_stack=4)
         return env
 
@@ -463,7 +463,7 @@ class PacmanRunner:
         env = PacmanEnv(self.layout)
         env = SkipFrame(env, skip=4)
         env = GrayScaleObservation(env)
-        env = ResizeObservation(env, shape=84)
+        env = ResizeObservation(env, shape=128)  # Changed from 84 to 128
         env = FrameStack(env, num_stack=4)
         return env
 
@@ -510,7 +510,7 @@ def get_nn_input_visualization(env, state):
     if isinstance(processed_state, torch.Tensor):
         processed_state = processed_state.cpu().numpy()
     
-    # If using frame stacking (shape is [4,84,84]), take most recent frame
+    # If using frame stacking (shape is [4,128,128]), take most recent frame
     if len(processed_state.shape) == 3 and processed_state.shape[0] == 4:
         processed_state = processed_state[0]
     
@@ -539,7 +539,7 @@ def get_nn_input_visualization(env, state):
     
     # Plot neural network input
     ax2.imshow(processed_state, cmap='gray')
-    ax2.set_title('Neural Network Input (84x84)')
+    ax2.set_title('Neural Network Input (128x128)')  # Updated size in title
     ax2.axis('off')
     
     # Add a main title
