@@ -504,6 +504,7 @@ def get_nn_input_visualization(env, state):
     # Get the base environment and processed state
     base_env = env
     processed_state = state
+    raw_screen = None
     
     # If it's a tensor, convert to numpy
     if isinstance(processed_state, torch.Tensor):
@@ -522,6 +523,14 @@ def get_nn_input_visualization(env, state):
             raw_screen = base_env.get_screen_rgb_array()
             break
         base_env = base_env.env
+    
+    # If we couldn't get the raw screen, use the original state
+    if raw_screen is None:
+        raw_screen = state
+        if len(raw_screen.shape) == 3 and raw_screen.shape[0] == 4:
+            raw_screen = raw_screen[0]
+        if isinstance(raw_screen, torch.Tensor):
+            raw_screen = raw_screen.cpu().numpy()
     
     # Plot original game screen
     ax1.imshow(raw_screen)
