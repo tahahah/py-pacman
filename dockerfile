@@ -21,6 +21,8 @@ RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -
 # Update PATH environment variable
 ENV PATH=/opt/conda/bin:$PATH
 
+RUN conda config --set anaconda_anon_usage off
+
 
 # Install Python 3.8.2 and PyTorch with CUDA 12.1
 RUN conda install python=3.8.2 --no-deps -y \
