@@ -22,9 +22,9 @@ RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -
 ENV PATH=/opt/conda/bin:$PATH
 
 
-# Install Python 3.8 and PyTorch nightly build with CUDA 12.2
-RUN conda install python=3.8.2 -y \
-    && conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
+# Install Python 3.9 and PyTorch with CUDA 12.1
+RUN conda install python=3.9 -y \
+    && conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y
 
 
 #
