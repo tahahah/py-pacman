@@ -83,7 +83,7 @@ class PacmanAgent:
             return np.random.randint(n_actions)
         else:
             with torch.no_grad():
-                state = np.transpose(state, (2, 0, 1))  # [H, W, C] to [C, H, W]
+                # state = np.transpose(state, (2, 0, 1))  # [H, W, C] to [C, H, W]
                 state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0)
                 # Get Q-values directly from forward pass (it internally handles the distribution)
                 return self.policy_net(state).max(1)[1].item()
@@ -462,10 +462,10 @@ class PacmanTrainer:
                       sum([sys.getsizeof(action) for action in actions_buffer])
         return buffer_size
     def _get_epsilon(self, frame_idx):
-        # Start with a lower initial epsilon and decay faster
+        # Start with a lower initial epsilon and decay slower
         initial_epsilon = 0.95  # Lower initial exploration rate
         min_epsilon = 0.05      # Minimum exploration rate
-        decay_rate = 45500       # Faster decay rate
+        decay_rate = 4550000    # Slower decay rate
 
         return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
     
