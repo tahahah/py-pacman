@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Miniconda
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /miniconda.sh \
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-py38_23.11.0-2-Linux-x86_64.sh -O /miniconda.sh \
     && bash /miniconda.sh -b -p /opt/conda \
     && rm /miniconda.sh \
     && /opt/conda/bin/conda clean -a
@@ -21,12 +21,9 @@ RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -
 # Update PATH environment variable
 ENV PATH=/opt/conda/bin:$PATH
 
-RUN conda config --set anaconda_anon_usage off
-
-
 # Install Python 3.8.2 and PyTorch with CUDA 12.1
-RUN conda install python=3.8.2 --no-deps -y \
-    && conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y
+RUN conda install python=3.8.2 -y \
+    && conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
 
 
 #
