@@ -233,7 +233,7 @@ class PacmanTrainer:
         env = PacmanEnv(layout=self.layout)
         env = SkipFrame(env, skip=self.frames_to_skip)
         env = GrayScaleObservation(env)
-        env = ResizeObservation(env, shape=64)  # Changed from 84 to 128
+        env = ResizeObservation(env, shape=84)  # Changed from 84 to 128
         env = FrameStack(env, num_stack=4)
         return env
 
@@ -518,7 +518,7 @@ class PacmanRunner:
         env = PacmanEnv(self.layout)
         env = SkipFrame(env, skip=4)
         env = GrayScaleObservation(env)
-        env = ResizeObservation(env, shape=128)  # Changed from 84 to 128
+        env = ResizeObservation(env, shape=84)  # Changed from 84 to 128
         env = FrameStack(env, num_stack=4)
         return env
 
