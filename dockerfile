@@ -23,7 +23,7 @@ ENV PATH=/opt/conda/bin:$PATH
 
 # Install Python 3.8.2 and PyTorch with CUDA 12.1
 RUN conda install python=3.8.2 -y \
-    && conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
+    && conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch-nightly -c nvidia -y
 
 
 #
