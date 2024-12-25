@@ -14,8 +14,8 @@ services:
     networks:
       - app_network
     volumes:
-      - pacman_volume:/data
-      - ./image_data:/app/data  # Add this line to mount the host directory to the container directory
+      - .:/app  # Mount entire project directory
+      - ./data:/app/data  # Keep existing data directory mount
 
     # depends_on:
     #   rabbitmqserver:

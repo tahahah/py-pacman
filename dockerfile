@@ -45,7 +45,7 @@ RUN chmod +x /start.sh
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements.txt file into the container
+# Copy only the requirements file first
 COPY requirements.txt .
 
 # Ensure pip is below version 24.1
@@ -54,11 +54,8 @@ RUN pip install "pip<24.1" wheel==0.36.2 setuptools==56.0.0
 # Install the dependencies from requirements.txt
 RUN pip install -r requirements.txt
 
-# Copy the rest of your application code into the container
-COPY --chown=app:app . .
-
-# Ensure the directory exists and has the correct permissions
-RUN mkdir -p /var/lib/apt/lists/partial && chmod -R 755 /var/lib/apt/lists
+# Create necessary directories for X11
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
 # Install Xvfb, ALSA, and other necessary packages
 RUN apt-get update && apt-get install -y \
@@ -67,7 +64,7 @@ RUN apt-get update && apt-get install -y \
     python3-pygame \
     && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories for X11
-RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
-# CMD ["python", "-u", "dqn_pytorch.py", "-lay", "classic", "-e", "20001", "-t", "-frs", "4"]
+# Ensure the directory exists and has the correct permissions
+RUN mkdir -p /var/lib/apt/lists/partial && chmod -R 755 /var/lib/apt/lists
+
 ENTRYPOINT [ "/start.sh" ]
