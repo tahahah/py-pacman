@@ -59,13 +59,18 @@ class PacmanAgent:
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00004, eps=1.5e-4)
         self.steps_done = 0
+        self.atoms = 51  # Number of atoms for distributional RL
+        self.v_min = -20  # Minimum value to account for death + remaining pellets penalty
+        self.v_max = 30   # Maximum value to account for ghost eating, pellet streaks, and accumulated survival bonus
+        self.support = torch.linspace(self.v_min, self.v_max, self.atoms).to(device)
+        self.delta_z = (self.v_max - self.v_min) / (self.atoms - 1)
 
         # Try to load the model from Hugging Face if it exists
-        self.pretrained_model = None #"pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward"
+        self.pretrained_model = None
         self.model_name = model_name
         try:
             huggingface_hub.login(token=HF_TOKEN)
-            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.pretrained_model if self.pretrained_model else self.model}", filename="checkpoints/pacman.pth", repo_type="model")
+            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.pretrained_model if self.pretrained_model else self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
             state_dict = torch.load(model_path, map_location=device)
             self.policy_net.load_state_dict(state_dict)
             self.target_net.load_state_dict(state_dict)
@@ -78,11 +83,50 @@ class PacmanAgent:
             return np.random.randint(n_actions)
         else:
             with torch.no_grad():
-                state = torch.tensor(state.__array__(), device=device).unsqueeze(0)
+                state = np.transpose(state, (2, 0, 1))  # [H, W, C] to [C, H, W]
+                state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0)
+                # Get Q-values directly from forward pass (it internally handles the distribution)
                 return self.policy_net(state).max(1)[1].item()
 
-    def optimize_model(self, memory, gamma=0.99, pellets_left=0):
+    def projection_distribution(self, next_dist, rewards, dones):
+        """Project next state distribution onto current state."""
+        batch_size = rewards.size(0)
+        
+        # Expand rewards and dones to match distribution shape
+        rewards = rewards.unsqueeze(1).expand(-1, self.atoms)
+        dones = dones.unsqueeze(1).expand(-1, self.atoms)
+        
+        # Calculate projected values: R + γz (no reward for terminal states)
+        support = self.support.unsqueeze(0).expand(batch_size, -1)
+        Tz = rewards + (1 - dones) * 0.99 * support  # gamma = 0.99
+        Tz = Tz.clamp(min=self.v_min, max=self.v_max)
+        
+        # Get index of projected value
+        b = (Tz - self.v_min) / self.delta_z
+        l = b.floor().long()
+        u = b.ceil().long()
+        
+        # Handle corner cases where value equals support
+        l[(u > 0) * (l == u)] -= 1
+        u[(l < (self.atoms - 1)) * (l == u)] += 1
+        
+        # Distribute probability
+        projected_dist = torch.zeros_like(next_dist)
+        offset = torch.linspace(0, ((batch_size - 1) * self.atoms), batch_size).unsqueeze(1).expand(batch_size, self.atoms).to(device)
+        
+        proj_dist = torch.zeros(batch_size, self.atoms, device=device)
+        for atom_idx in range(self.atoms):
+            tz = Tz[:, atom_idx]
+            bz = b[:, atom_idx]
+            lz = l[:, atom_idx]
+            uz = u[:, atom_idx]
+            
+            proj_dist.add_(next_dist[:, atom_idx].unsqueeze(1) * (uz.float() - bz).unsqueeze(1))
+            proj_dist.add_(next_dist[:, atom_idx].unsqueeze(1) * (bz - lz.float()).unsqueeze(1))
+            
+        return proj_dist
 
+    def optimize_model(self, memory, gamma=0.99, pellets_left=0):
         if len(memory) < 32:  # Ensure there are enough samples in the memory
             return
 
@@ -95,34 +139,45 @@ class PacmanAgent:
         done = torch.tensor(done, device=device, dtype=torch.float32)
         weights = torch.tensor(weights, device=device, dtype=torch.float32)
 
-        state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1)).squeeze(1)
-        
+        # Get current state distribution
+        dist = self.policy_net(state, return_distribution=True)
+        dist = dist[range(32), action]  # Select the distribution for taken actions
+
+        # Get next state distribution
         with torch.no_grad():
+            # Double DQN: Use online network to select action, target network to get distribution
             next_actions = self.policy_net(next_state).max(1)[1]
-            next_state_values = self.target_net(next_state).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            next_state_values[done.bool()] = 0.0  # Convert done to boolean tensor
-            expected_state_action_values = (next_state_values * gamma) + reward
-            
-        # Calculate TD errors for priority updating
-        td_errors = torch.abs(state_action_values - expected_state_action_values).detach()
+            next_dist = self.target_net(next_state, return_distribution=True)
+            next_dist = next_dist[range(32), next_actions]
+
+            # Project next state distribution
+            proj_dist = self.projection_distribution(next_dist, reward, done)
+
+        # Calculate cross-entropy loss
+        loss = -(proj_dist * dist.log()).sum(1)
+        weighted_loss = (weights * loss).mean()
         
-        # Calculate weighted loss
-        loss = (weights * F.smooth_l1_loss(state_action_values, expected_state_action_values, reduction='none')).mean()
-        wandb.log({"loss": loss})
-        
-        self.optimizer.zero_grad()  # Zero the gradients
-        loss.backward()  # Backpropagation
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)  # Clip gradients
-        self.optimizer.step()  # Update the model parameters
+        # Calculate TD errors for priority updating (using mean predicted Q-values)
+        with torch.no_grad():
+            current_q = (dist * self.support).sum(1)
+            target_q = (proj_dist * self.support).sum(1)
+            td_errors = torch.abs(current_q - target_q)
+
+        self.optimizer.zero_grad()
+        weighted_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
+        self.optimizer.step()
+
+        # Reset noise for all noisy layers
+        self.policy_net.reset_noise()
+        self.target_net.reset_noise()
 
         # Update priorities in the replay buffer
         memory.update_priorities(indices, td_errors.cpu().numpy())
         
     def update_target_network(self):
-        # Soft update of target network
-        tau = 0.005
-        for target_param, policy_param in zip(self.target_net.parameters(), self.policy_net.parameters()):
-            target_param.data.copy_(tau * policy_param.data + (1.0 - tau) * target_param.data)
+        # Hard update of target network: θ_target = θ_policy
+        self.target_net.load_state_dict(self.policy_net.state_dict())
 
     def save_model(self, filename):
         # Save the model locally
@@ -282,7 +337,7 @@ class PacmanTrainer:
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(screen.shape, n_actions)
-        self.memory = ReplayBuffer(32)  # BATCH_SIZE = 32
+        self.memory = ReplayBuffer(100000)  # Replay buffer capacity = 100k, different from batch_size which is 32
 
         frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
