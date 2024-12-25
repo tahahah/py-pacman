@@ -52,7 +52,7 @@ MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_128"):
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_o1_consult"):
         self.policy_net = DQN(input_dim, output_dim).to(device)
         self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -233,7 +233,7 @@ class PacmanTrainer:
         env = PacmanEnv(layout=self.layout)
         env = SkipFrame(env, skip=self.frames_to_skip)
         env = GrayScaleObservation(env)
-        env = ResizeObservation(env, shape=128)  # Changed from 84 to 128
+        env = ResizeObservation(env, shape=64)  # Changed from 84 to 128
         env = FrameStack(env, num_stack=4)
         return env
 
