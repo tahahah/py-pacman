@@ -29,7 +29,6 @@ from redis.backoff import ExponentialBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 from redis.retry import Retry
 import gc
-import cv2
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
