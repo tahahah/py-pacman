@@ -29,6 +29,7 @@ from redis.backoff import ExponentialBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 from redis.retry import Retry
 import gc
+import cv2
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
@@ -231,10 +232,10 @@ class PacmanTrainer:
         logging.basicConfig(level=logging.warning, format='%(asctime)s - %(levelname)s - %(message)s')
 
     def _create_environment(self):
-        env = PacmanEnv(layout=self.layout)
+        env = PacmanEnv(self.layout)
         env = SkipFrame(env, skip=self.frames_to_skip)
         env = GrayScaleObservation(env)
-        env = ResizeObservation(env, shape=84)  # Changed from 84 to 128
+        env = ResizeObservation(env, shape=84)
         env = FrameStack(env, num_stack=4)
         return env
 
@@ -338,7 +339,7 @@ class PacmanTrainer:
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(screen.shape, n_actions)
-        self.memory = ReplayBuffer(100000)  # Replay buffer capacity = 100k, different from batch_size which is 32
+        self.memory = ReplayBuffer(10000)  # Reduced from 100k to 10k
 
         frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
@@ -380,6 +381,17 @@ class PacmanTrainer:
                 if self.enable_rmq or self.save_locally or (i_episode % 1000 == 0 and self.log_video_to_wandb):
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
+
+                # Debug logging for state dimensions
+                if isinstance(state, np.ndarray):
+                    logging.warning(f"State shape (numpy): {state.shape}")
+                elif isinstance(state, torch.Tensor):
+                    logging.warning(f"State shape (tensor): {state.shape}")
+                elif hasattr(state, '__array__'):
+                    state_array = state.__array__()
+                    logging.warning(f"State shape (array-like): {state_array.shape}")
+                else:
+                    logging.warning(f"State type: {type(state)}")
 
                 self.memory.cache(state, next_state, action, reward, done)
 
@@ -605,7 +617,7 @@ def get_nn_input_visualization(env, state):
     
     # Plot neural network input
     ax2.imshow(processed_state, cmap='gray')
-    ax2.set_title('Neural Network Input (128x128)')  # Updated size in title
+    ax2.set_title('Neural Network Input (84x84)')  # Updated size in title
     ax2.axis('off')
     
     # Add a main title
