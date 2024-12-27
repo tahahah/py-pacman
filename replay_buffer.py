@@ -1,8 +1,6 @@
 from collections import deque
 import torch
 import random
-import logging
-import numpy as np
 
 USE_CUDA = torch.cuda.is_available()
 
@@ -55,18 +53,6 @@ class ReplayBuffer:
 
     def cache(self, state, next_state, action, reward, done):
         max_priority = self.priorities.max() if self.buffer else 1.0
-
-        # Debug logging for state dimensions
-        if state is not None:
-            if isinstance(state, np.ndarray):
-                logging.warning(f"ReplayBuffer - State shape (numpy): {state.shape}")
-            elif isinstance(state, torch.Tensor):
-                logging.warning(f"ReplayBuffer - State shape (tensor): {state.shape}")
-            elif hasattr(state, '__array__'):
-                state_array = state.__array__()
-                logging.warning(f"ReplayBuffer - State shape (array-like): {state_array.shape}")
-            else:
-                logging.warning(f"ReplayBuffer - State type: {type(state)}")
 
         if len(self.buffer) < self.capacity:
             self.buffer.append((state, next_state, action, reward, done))
