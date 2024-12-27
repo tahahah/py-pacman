@@ -28,6 +28,7 @@ from PIL import Image
 from redis.backoff import ExponentialBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 from redis.retry import Retry
+import gc
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
@@ -431,23 +432,33 @@ class PacmanTrainer:
                     # Check if frames are already in range [0, 255], if not, scale them
                     if frames[0].max() <= 1.0:
                         frames = [frame * 255 for frame in frames]
+                    else:
+                        frames = frames_buffer.copy()
                     
                     # Stack frames
                     frames = np.stack(frames)
                     frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
                     logging.warning(f"Video frames shape: {frames.shape}")
                     
-                    # Create and log the video
-                    video = wandb.Video(frames, fps=10, format="mp4")
-                    wandb.log({
-                        "video": video,
-                        "image": wandb.Image(previous_frame),
-                    })
+                    try:
+                        # Create and log the video
+                        video = wandb.Video(frames, fps=10, format="mp4")
+                        wandb.log({
+                            "video": video,
+                            "image": wandb.Image(previous_frame) if 'previous_frame' in locals() else None,
+                        })
+                    except Exception as e:
+                        logging.warning(f"Failed to log video: {e}")
+                    finally:
+                        # Clear memory
+                        del frames
+                        gc.collect()
                     
-
-
-            frames_buffer, actions_buffer = [], []
-            
+                    # Clear buffers after saving/logging
+                    frames_buffer.clear()
+                    actions_buffer.clear()
+                    gc.collect()
+                    
 
 
         logging.warning('Training Complete')
