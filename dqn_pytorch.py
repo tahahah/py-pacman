@@ -474,9 +474,9 @@ class PacmanTrainer:
         return buffer_size
     def _get_epsilon(self, frame_idx):
         # Start with a lower initial epsilon and decay slower
-        initial_epsilon = 0.94  # Lower initial exploration rate
+        initial_epsilon = 0.9344  # Lower initial exploration rate
         min_epsilon = 0.05      # Minimum exploration rate
-        decay_rate = 4550000    # Slower decay rate
+        decay_rate = 155000    # Slower decay rate
 
         return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
     
