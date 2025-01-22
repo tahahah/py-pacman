@@ -476,7 +476,7 @@ class PacmanTrainer:
         # Start with a lower initial epsilon and decay slower
         initial_epsilon = 0.64755  # Continue from last run
         min_epsilon = 0.05      # Minimum exploration rate
-        decay_rate = 155000    # Slower decay rate
+        decay_rate = 455000    # Slower decay rate
 
         return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
     
