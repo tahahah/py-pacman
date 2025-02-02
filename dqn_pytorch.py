@@ -29,6 +29,7 @@ from redis.backoff import ExponentialBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 from redis.retry import Retry
 import gc
+import psutil
 
 from replay_buffer import ReplayBuffer
 from src.env.pacman_env import PacmanEnv
@@ -133,6 +134,10 @@ class PacmanAgent:
 
         state, next_state, action, reward, done, indices, weights = memory.sample(32)
         
+        # Convert states to float32
+        state = state.astype(np.float32) / 255.0
+        next_state = next_state.astype(np.float32) / 255.0
+        
         state = torch.tensor(state, device=device, dtype=torch.float32)
         next_state = torch.tensor(next_state, device=device, dtype=torch.float32)
         action = torch.tensor(action, device=device, dtype=torch.long)
@@ -229,7 +234,8 @@ class PacmanTrainer:
         self.action_encoder = ActionEncoder()
         self.log_video_to_wandb = log_video_to_wandb
         logging.basicConfig(level=logging.warning, format='%(asctime)s - %(levelname)s - %(message)s')
-
+        self.memory_limit_gb = 10
+        
     def _create_environment(self):
         env = PacmanEnv(layout=self.layout)
         env = SkipFrame(env, skip=self.frames_to_skip)
@@ -328,6 +334,16 @@ class PacmanTrainer:
             self.channel.basic_publish(exchange='', routing_key='HF_upload_queue', body=message)
             logging.warning(f"Published keys to RabbitMQ queue 'HF_upload_queue': {self.episode_keys_buffer}")
 
+    def check_memory(self):
+        process = psutil.Process()
+        mem_gb = process.memory_info().rss / 1024**3
+        if mem_gb > self.memory_limit_gb:
+            self.cleanup_memory()
+            print(f"Memory usage exceeded {self.memory_limit_gb}GB, cleaned up")
+
+    def cleanup_memory(self):
+        torch.cuda.empty_cache()
+        gc.collect()
 
     def train(self):
         if self.enable_rmq:
@@ -381,7 +397,10 @@ class PacmanTrainer:
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
 
-                self.memory.cache(state, next_state, action, reward, done)
+                # Convert states to uint8 before storage
+                state_uint8 = (state * 255).astype(np.uint8)
+                next_state_uint8 = (next_state * 255).astype(np.uint8)
+                self.memory.cache(state_uint8, next_state_uint8, action, reward, done)
 
                 state = next_state if not done else None
                 if t%4==0:
