@@ -398,8 +398,10 @@ class PacmanTrainer:
                     actions_buffer.append(self.action_encoder(action))
 
                 # Convert states to uint8 before storage
-                state_uint8 = (state * 255).astype(np.uint8)
-                next_state_uint8 = (next_state * 255).astype(np.uint8)
+                state_array = np.array(state)
+                state_uint8 = (state_array * 255).astype(np.uint8)
+                next_state_array = np.array(next_state)
+                next_state_uint8 = (next_state_array * 255).astype(np.uint8)
                 self.memory.cache(state_uint8, next_state_uint8, action, reward, done)
 
                 state = next_state if not done else None
