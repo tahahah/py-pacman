@@ -29,7 +29,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    mem_reservation: 8g
         
   rabbitmqserver:
     container_name: rabbitmqServer
