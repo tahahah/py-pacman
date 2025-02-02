@@ -190,7 +190,8 @@ class PacmanEnv(gym.Env):
         reward = succ_reward - prev_reward
         reward += 0.1 * (prev_pellets - current_pellets)
         reward -= 0.02
-        ghost_dist = min(ghost.distance_to_pacman() for ghost in self.game.ghosts)
+        pacman_x, pacman_y = self.game.player.x, self.game.player.y
+        ghost_dist = min(ghost.distance_to_pacman(pacman_x, pacman_y) for ghost in self.game.ghosts)
         if ghost_dist < 5:
             reward -= 0.5
 

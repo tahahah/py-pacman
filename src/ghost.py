@@ -1,5 +1,6 @@
 import os
 from typing import Optional, Tuple
+import math
 
 import pygame as pg
 from pygame.surface import SurfaceType
@@ -269,3 +270,6 @@ class Ghost(object):
 
     def print_position(self):
         print(f"Ghost_{self.id} col: {self.nearest_col}, row: {self.nearest_row}")
+
+    def distance_to_pacman(self, pacman_x, pacman_y):
+        return math.sqrt((self.x - pacman_x)**2 + (self.y - pacman_y)**2)
