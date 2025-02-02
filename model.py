@@ -67,18 +67,21 @@ class DQN(nn.Module):
             nn.Conv2d(32, 64, 5, stride=5, padding=0), nn.ReLU())
         self.conv_output_size = 1024  # Updated for 128x128 input (64 * 4 * 4)
 
-    self.fc_h_v = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
-    self.fc_h_a = NoisyLinear(self.conv_output_size, hidden_size, std_init=noisy_std)
-    self.fc_z_v = NoisyLinear(hidden_size, self.atoms, std_init=noisy_std)
-    self.fc_z_a = NoisyLinear(hidden_size, output_dim * self.atoms, std_init=noisy_std)
-
+    self.conv1 = nn.Conv2d(input_dim[0], 32, kernel_size=8, stride=4)
+    self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
+    self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        
+    self.fc1 = NoisyLinear(7*7*64, 512)
+    self.fc2 = NoisyLinear(512, output_dim * atoms)
 
   def forward(self, x, log=False, return_distribution=False):
-    x = self.convs(x)
-    x = x.view(-1, self.conv_output_size)
-    v = self.fc_z_v(F.relu(self.fc_h_v(x)))  # Value stream
-    a = self.fc_z_a(F.relu(self.fc_h_a(x)))  # Advantage stream
-    v, a = v.view(-1, 1, self.atoms), a.view(-1, self.action_space, self.atoms)
+    x = F.relu(self.conv1(x))
+    x = F.relu(self.conv2(x))
+    x = F.relu(self.conv3(x))
+    x = x.view(x.size(0), -1)
+    x = F.relu(self.fc1(x))
+    x = self.fc2(x)
+    v, a = x.view(-1, 1, self.atoms), x.view(-1, self.action_space, self.atoms)
     q = v + a - a.mean(1, keepdim=True)  # Combine streams
     if log:  # Use log softmax for numerical stability
         q = F.log_softmax(q, dim=2)  # Log probabilities with action over second dimension

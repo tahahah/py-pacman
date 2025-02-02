@@ -180,13 +180,21 @@ class PacmanEnv(gym.Env):
             return 0
 
         prev_reward = self.game.total_rewards
+        prev_pellets = self.game.maze.get_number_of_pellets()
 
         self.game.player.change_player_vel(action, self.game)
         self.game.move_players()
 
         succ_reward = self.game.total_rewards
+        current_pellets = self.game.maze.get_number_of_pellets()
+        reward = succ_reward - prev_reward
+        reward += 0.1 * (prev_pellets - current_pellets)
+        reward -= 0.02
+        ghost_dist = min(ghost.distance_to_pacman() for ghost in self.game.ghosts)
+        if ghost_dist < 5:
+            reward -= 0.5
 
-        return succ_reward - prev_reward
+        return reward
 
     def get_mode(self) -> GameMode:
         """

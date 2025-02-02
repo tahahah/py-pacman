@@ -12,6 +12,7 @@ The classic game of Pacman built with Pygame, provided also with a Reinforcement
 - [Quick Start](#quick-start)
     - [Game](#game)
     - [RL Enviroment](#rl-environment)
+- [RL Architecture](#rl-architecture)
 
 # Quick Start
 
@@ -105,6 +106,54 @@ def run_agent(layout: str):
 ```
 
 For more examples check out the [`examples`](./examples) folder.
+
+# RL Architecture
+
+## Current Implementation
+
+### Neural Network Architecture
+- Rainbow DQN variant with:
+  - Noisy Linear layers for exploration
+  - Distributional RL (51 atoms)
+  - Double Q-learning
+  - Prioritized Experience Replay
+
+### Reward System (Current)
+```python
+reward_range = (-10, 5)  # From PacmanEnv class
+# Actual rewards set in _one_step_action():
+# - Small positive for pellets
+# - Large positive for ghosts
+# - Negative for time penalty
+# - -10 for death
+```
+
+## Recommended Reward Improvements
+Based on [Rainbow DQN paper](https://arxiv.org/abs/1710.02298):
+1. **Dense Rewards:**
+   ```python
+   reward += 0.1 * pellets_collected / total_pellets  # Progress bonus
+   reward -= 0.01  # Time penalty
+   ```
+2. **Ghost Behavior Incentives**:
+   ```python
+   if ghost_distance < safe_radius:
+       reward += 2.0 * (1 - ghost_distance/safe_radius)
+   ```
+3. **Power Pellet Multipliers**:
+   ```python
+   if power_pellet_active:
+       reward *= 1.5  # Encourage ghost chasing
+   ```
+
+## Hyperparameters
+```python
+LR = 0.00004
+GAMMA = 0.99
+EPS_START = 1.0
+EPS_END = 0.01
+EPS_DECAY = 10000
+```
 
 # Todos
 

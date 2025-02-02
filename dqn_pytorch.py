@@ -58,7 +58,7 @@ class PacmanAgent:
         self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.00004, eps=1.5e-4)
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.0001, eps=1e-5)
         self.steps_done = 0
         self.atoms = 51  # Number of atoms for distributional RL
         self.v_min = -20  # Minimum value to account for death + remaining pellets penalty
@@ -99,7 +99,7 @@ class PacmanAgent:
         
         # Calculate projected values: R + γz (no reward for terminal states)
         support = self.support.unsqueeze(0).expand(batch_size, -1)
-        Tz = rewards + (1 - dones) * 0.99 * support  # gamma = 0.99
+        Tz = rewards + (1 - dones) * 0.95 * support  # gamma = 0.95
         Tz = Tz.clamp(min=self.v_min, max=self.v_max)
         
         # Get index of projected value
@@ -127,7 +127,7 @@ class PacmanAgent:
             
         return proj_dist
 
-    def optimize_model(self, memory, gamma=0.99, pellets_left=0):
+    def optimize_model(self, memory, gamma=0.95, pellets_left=0):
         if len(memory) < 32:  # Ensure there are enough samples in the memory
             return
 
@@ -338,7 +338,7 @@ class PacmanTrainer:
         n_actions = self.env.action_space.n
 
         self.agent = PacmanAgent(screen.shape, n_actions)
-        self.memory = ReplayBuffer(20000)  # Replay buffer capacity = 100k, different from batch_size which is 32
+        self.memory = ReplayBuffer(100000)  # Increased capacity for better sampling
 
         frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
@@ -385,7 +385,7 @@ class PacmanTrainer:
 
                 state = next_state if not done else None
                 if t%4==0:
-                    self.agent.optimize_model(self.memory, gamma=0.99, pellets_left=self.env.maze.get_number_of_pellets())
+                    self.agent.optimize_model(self.memory, gamma=0.95, pellets_left=self.env.maze.get_number_of_pellets())
                 if done:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
@@ -476,7 +476,7 @@ class PacmanTrainer:
         # Start with a lower initial epsilon and decay slower
         initial_epsilon = 0.64755  # Continue from last run
         min_epsilon = 0.05      # Minimum exploration rate
-        decay_rate = 455000    # Slower decay rate
+        decay_rate = 500000    # Slower decay rate
 
         return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
     
