@@ -78,7 +78,7 @@ class DQN(nn.Module):
   def forward(self, x, log=False, return_distribution=False):
     assert x.dim() == 4, f"Expected 4D input, got {x.dim()}D"
     x = x.view(x.size(0), -1)
-    x = F.relu(self.conv1(x.view(-1, 3, 84, 84)))
+    x = F.relu(self.conv1(x.view(-1, 4, 84, 84)))
     x = F.relu(self.conv2(x))
     x = F.relu(self.conv3(x))
     x = x.view(x.size(0), -1)
