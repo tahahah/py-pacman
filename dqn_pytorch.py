@@ -54,7 +54,7 @@ MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_o1_consult"):
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_deepseek_consult"):
         self.policy_net = DQN(input_dim, output_dim).to(device)
         self.target_net = DQN(input_dim, output_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -85,10 +85,10 @@ class PacmanAgent:
             return np.random.randint(n_actions)
         else:
             with torch.no_grad():
-                # state = np.transpose(state, (2, 0, 1))  # [H, W, C] to [C, H, W]
-                state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0) / 255.0
-                # Get Q-values directly from forward pass (it internally handles the distribution)
-                return self.policy_net(state).max(1)[1].item()
+                state = torch.tensor(np.array(state), device=device, dtype=torch.float32).unsqueeze(0) / 255.0
+                q_values = self.policy_net(state).mean(2)  # Average over atoms
+                action = q_values.max(1)[1].item()
+                return action
 
     def projection_distribution(self, next_dist, rewards, dones):
         """Project next state distribution onto current state."""
@@ -138,8 +138,8 @@ class PacmanAgent:
         state = state.astype(np.float32) / 255.0
         next_state = next_state.astype(np.float32) / 255.0
         
-        state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0) / 255.0
-        next_state = torch.tensor(next_state, device=device, dtype=torch.float32).unsqueeze(0) / 255.0
+        state = torch.tensor(np.array(state), device=device, dtype=torch.float32).unsqueeze(0) / 255.0
+        next_state = torch.tensor(np.array(next_state), device=device, dtype=torch.float32).unsqueeze(0) / 255.0
         action = torch.tensor(action, device=device, dtype=torch.long)
         reward = torch.tensor(reward, device=device, dtype=torch.float32)
         done = torch.tensor(done, device=device, dtype=torch.float32)
@@ -495,7 +495,7 @@ class PacmanTrainer:
         return buffer_size
     def _get_epsilon(self, frame_idx):
         # Start with a lower initial epsilon and decay slower
-        initial_epsilon = 0.64755  # Continue from last run
+        initial_epsilon = 0.99  # Continue from last run
         min_epsilon = 0.05      # Minimum exploration rate
         decay_rate = 500000    # Slower decay rate
 
