@@ -40,6 +40,7 @@ class NoisyLinear(nn.Module):
     self.bias_epsilon.copy_(epsilon_out)
 
   def forward(self, input):
+    assert input.dim() == 2, f"Expected 2D input, got {input.dim()}D"
     if self.training:
       return F.linear(input, self.weight_mu + self.weight_sigma * self.weight_epsilon, self.bias_mu + self.bias_sigma * self.bias_epsilon)
     else:
@@ -75,7 +76,9 @@ class DQN(nn.Module):
     self.fc2 = NoisyLinear(512, output_dim * atoms)
 
   def forward(self, x, log=False, return_distribution=False):
-    x = F.relu(self.conv1(x))
+    assert x.dim() == 4, f"Expected 4D input, got {x.dim()}D"
+    x = x.view(x.size(0), -1)
+    x = F.relu(self.conv1(x.view(-1, 3, 84, 84)))
     x = F.relu(self.conv2(x))
     x = F.relu(self.conv3(x))
     x = x.view(x.size(0), -1)

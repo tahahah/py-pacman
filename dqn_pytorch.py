@@ -86,7 +86,7 @@ class PacmanAgent:
         else:
             with torch.no_grad():
                 # state = np.transpose(state, (2, 0, 1))  # [H, W, C] to [C, H, W]
-                state = torch.from_numpy(np.array(state)).to(device).float().unsqueeze(0)
+                state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0) / 255.0
                 # Get Q-values directly from forward pass (it internally handles the distribution)
                 return self.policy_net(state).max(1)[1].item()
 
@@ -138,8 +138,8 @@ class PacmanAgent:
         state = state.astype(np.float32) / 255.0
         next_state = next_state.astype(np.float32) / 255.0
         
-        state = torch.tensor(state, device=device, dtype=torch.float32)
-        next_state = torch.tensor(next_state, device=device, dtype=torch.float32)
+        state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0) / 255.0
+        next_state = torch.tensor(next_state, device=device, dtype=torch.float32).unsqueeze(0) / 255.0
         action = torch.tensor(action, device=device, dtype=torch.long)
         reward = torch.tensor(reward, device=device, dtype=torch.float32)
         done = torch.tensor(done, device=device, dtype=torch.float32)
