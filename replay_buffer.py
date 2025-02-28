@@ -17,6 +17,8 @@ class ReplayBuffer:
         self.n_steps = n_steps
         self.gamma = gamma
         self.n_step_buffer = deque(maxlen=n_steps)
+        # Add a counter for garbage collection
+        self.cache_count = 0
         
     def _get_n_step_info(self):
         """Return the n-step reward, next_state, and done flag."""
@@ -79,7 +81,8 @@ class ReplayBuffer:
             self.n_step_buffer.clear()
             
         # Periodic garbage collection
-        if self.position % 1000 == 0:
+        self.cache_count += 1
+        if self.cache_count % 1000 == 0:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

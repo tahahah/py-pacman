@@ -42,6 +42,9 @@ ENV UV_SYSTEM_PYTHON=1
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
+# Set memory limits for the container
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+
 # Set the working directory in the container
 WORKDIR /app
 
@@ -70,4 +73,4 @@ RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 # Ensure the directory exists and has the correct permissions
 RUN mkdir -p /var/lib/apt/lists/partial && chmod -R 755 /var/lib/apt/lists
 
-ENTRYPOINT [ "/start.sh" ]
+ENTRYPOINT ["/start.sh"]

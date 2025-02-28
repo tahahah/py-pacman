@@ -178,6 +178,11 @@ class PacmanAgent:
         # Update priorities in the replay buffer
         memory.update_priorities(indices, td_errors.cpu().numpy())
         
+        # Explicitly clean up tensors to prevent memory leaks
+        del state, next_state, action, reward, done, weights
+        del dist, next_q_values, next_actions, next_dist, proj_dist
+        del loss, weighted_loss, current_q, target_q, td_errors
+        
     def update_target_network(self):
         # Hard update of target network: θ_target = θ_policy
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -355,8 +360,12 @@ class PacmanTrainer:
         self.memory = ReplayBuffer(100000, n_steps=3, gamma=0.95)  # Initialize with n_steps parameter
 
         frames_buffer, actions_buffer = [], []
-        max_batch_size = 500 * 1024 * 1024  # 400 MB
-
+        max_batch_size = 500 * 1024 * 1024  # 500 MB
+        
+        # Add memory monitoring
+        import psutil
+        memory_process = psutil.Process()
+        
         # Get the base environment to access the render method
         base_env = self.env
         while hasattr(base_env, 'env'):
@@ -394,7 +403,18 @@ class PacmanTrainer:
                 if self.enable_rmq or self.save_locally or (i_episode % 1000 == 0 and self.log_video_to_wandb):
                     frames_buffer.append(current_frame)
                     actions_buffer.append(self.action_encoder(action))
-
+                    
+                    # Limit the size of frames_buffer to prevent memory issues
+                    if len(frames_buffer) > 1000:  # Cap at 1000 frames
+                        logging.warning(f"Frames buffer exceeded 1000 frames, saving data...")
+                        if self.enable_rmq:
+                            self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
+                        elif self.save_locally:
+                            self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
+                        frames_buffer.clear()
+                        actions_buffer.clear()
+                        gc.collect()
+                    
                 # Convert states to uint8 before storage
                 state_array = np.array(state)
                 state_uint8 = (state_array * 255).astype(np.uint8)
@@ -402,9 +422,23 @@ class PacmanTrainer:
                 next_state_uint8 = (next_state_array * 255).astype(np.uint8)
                 self.memory.cache(state_uint8, next_state_uint8, action, reward, done)
 
+                # Clear variables to free memory
+                del state_array
+                del next_state_array
+                
                 state = next_state if not done else None
                 if t%4==0:
                     self.agent.optimize_model(self.memory, gamma=0.95, pellets_left=self.env.maze.get_number_of_pellets())
+                    
+                    # Check memory usage periodically and force garbage collection if needed
+                    if t % 100 == 0:
+                        memory_info = memory_process.memory_info()
+                        memory_usage_percent = memory_process.memory_percent()
+                        if memory_usage_percent > 80:  # If using more than 80% of available memory
+                            logging.warning(f"High memory usage detected: {memory_usage_percent:.1f}% - {memory_info.rss / (1024 * 1024):.1f} MB")
+                            gc.collect()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
                 if done:
                     pellets_left = self.env.maze.get_number_of_pellets()
                     if self.save_locally:
@@ -413,6 +447,16 @@ class PacmanTrainer:
                     
                     # Log the reward to wandb
                     wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": pellets_left, "epsilon": epsilon})
+                    
+                    # Force garbage collection at the end of each episode
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    # Log memory usage at the end of each episode
+                    memory_info = memory_process.memory_info()
+                    memory_usage_percent = memory_process.memory_percent()
+                    logging.warning(f"Memory usage: {memory_usage_percent:.1f}% - {memory_info.rss / (1024 * 1024):.1f} MB")
                     
                     break
 
@@ -438,7 +482,22 @@ class PacmanTrainer:
                         torch.cuda.empty_cache()
                         logging.warning(torch.cuda.memory_summary())
                     torch.autograd.set_detect_anomaly(True)
-
+                    
+                    # Monitor and log system memory usage
+                    memory_info = memory_process.memory_info()
+                    memory_usage_percent = memory_process.memory_percent()
+                    logging.warning(f"System memory usage: {memory_usage_percent:.1f}% - {memory_info.rss / (1024 * 1024):.1f} MB")
+                    
+                    # If memory usage is high, try to reduce it
+                    if memory_usage_percent > 85:
+                        logging.warning("Memory usage is high, performing additional cleanup...")
+                        # Clear any unnecessary data
+                        frames_buffer.clear()
+                        actions_buffer.clear()
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    
                 if i_episode % 1000 == 0:
                     self.agent.save_model('pacman.pth')
                     logging.warning(f"Saved model at episode {i_episode}")
@@ -471,7 +530,11 @@ class PacmanTrainer:
                     finally:
                         # Clear memory
                         del frames
+                        if 'video' in locals():
+                            del video
                         gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                     
                     # Clear buffers after saving/logging
                     frames_buffer.clear()
