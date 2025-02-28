@@ -132,8 +132,8 @@ class PacmanAgent:
         state, next_state, action, reward, done, indices, weights = memory.sample(32)
         
         # Convert states to float32 and normalize once
-        state = torch.tensor(state.astype(np.float32), device=device) / 255.0
-        next_state = torch.tensor(next_state.astype(np.float32), device=device) / 255.0
+        state = torch.tensor(state, device=device, dtype=torch.float32) / 255.0
+        next_state = torch.tensor(next_state, device=device, dtype=torch.float32) / 255.0
         action = torch.tensor(action, device=device, dtype=torch.long)
         reward = torch.tensor(reward, device=device, dtype=torch.float32)
         done = torch.tensor(done, device=device, dtype=torch.float32)
