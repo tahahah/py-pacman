@@ -87,7 +87,8 @@ class PacmanAgent:
         else:
             with torch.no_grad():
                 state = torch.tensor(np.array(state), device=device, dtype=torch.float32).unsqueeze(0) / 255.0
-                q_values = self.policy_net(state).mean(2)  # Average over atoms
+                # Get q_values directly from the model, no need to average over atoms
+                q_values = self.policy_net(state, return_distribution=False)
                 action = q_values.max(1)[1].item()
                 return action
 
@@ -146,7 +147,8 @@ class PacmanAgent:
         # Get next state distribution using Double DQN
         with torch.no_grad():
             # Use online network to select action, target network to get distribution
-            next_actions = self.policy_net(next_state).max(1)[1]
+            next_q_values = self.policy_net(next_state, return_distribution=False)
+            next_actions = next_q_values.max(1)[1]
             next_dist = self.target_net(next_state, return_distribution=True)
             next_dist = next_dist[range(32), next_actions]
 
