@@ -39,9 +39,9 @@ COPY requirements.txt .
 
 # Install PyTorch with CUDA support and other dependencies
 # Using a more direct approach to ensure proper installation
-RUN uv pip install --system torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-RUN uv pip install --system "pip<24.1" wheel==0.36.2 setuptools==56.0.0
-RUN uv pip install --system -r requirements.txt
+RUN uv pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
+RUN uv pip install "pip<24.1" wheel==0.36.2 setuptools==56.0.0
+RUN uv pip install -r requirements.txt
 
 # Verify Python and PyTorch installation
 RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
