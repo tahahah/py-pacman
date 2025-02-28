@@ -4,6 +4,7 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
+import numpy as np
 
 
 # Factorised NoisyLinear layer with bias
@@ -51,55 +52,120 @@ class DQN(nn.Module):
                 atoms=51,  # Default value commonly used in Rainbow DQN
                 architecture='canonical',  # Using simpler architecture as default
                 hidden_size=512,  # Common default value
-                noisy_std=0.1):  # Common default value
+                noisy_std=0.1,  # Common default value
+                advantage_groups=4):  # Target number of groups for advantage calculation
     super(DQN, self).__init__()
     self.atoms = atoms
     self.action_space = output_dim
-    c, h, w= input_dim
+    
+    # Handle advantage grouping
+    self.advantage_groups = min(advantage_groups, output_dim)
+    
+    # Calculate actions per group (can be uneven)
+    self.group_sizes = []
+    base_size = output_dim // self.advantage_groups
+    remainder = output_dim % self.advantage_groups
+    
+    for i in range(self.advantage_groups):
+        # Distribute remainder across groups
+        size = base_size + (1 if i < remainder else 0)
+        self.group_sizes.append(size)
+    
+    # Calculate cumulative group sizes for indexing
+    self.group_cumsum = [0]
+    for size in self.group_sizes:
+        self.group_cumsum.append(self.group_cumsum[-1] + size)
+    
+    c, h, w = input_dim
+    
+    # Define value range for distributional RL
+    self.v_min, self.v_max = -60, 80
+    self.support = torch.linspace(self.v_min, self.v_max, self.atoms)
+    self.delta_z = (self.v_max - self.v_min) / (self.atoms - 1)
+    
+    # Feature extraction layers
     if architecture == 'canonical':
         self.convs = nn.Sequential(
-            nn.Conv2d(c, 32, 8, stride=4, padding=0), nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
-            nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU())
-        self.conv_output_size = 3136  # Updated for 128x128 input (64 * 12 * 12)==9216 edit: reverted back for 84x84
-    elif architecture == 'data-efficient':
-        self.convs = nn.Sequential(
-            nn.Conv2d(c, 32, 5, stride=5, padding=0), nn.ReLU(),
-            nn.Conv2d(32, 64, 5, stride=5, padding=0), nn.ReLU())
-        self.conv_output_size = 1024  # Updated for 128x128 input (64 * 4 * 4)
-
-    self.conv1 = nn.Conv2d(input_dim[0], 32, kernel_size=8, stride=4)
-    self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-    self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        
-    self.fc1 = NoisyLinear(7*7*64, 512)
-    self.fc2 = NoisyLinear(512, output_dim * atoms)
-
-  def forward(self, x, log=False, return_distribution=False):
-    assert x.dim() == 4, f"Expected 4D input, got {x.dim()}D"
-    x = x.view(x.size(0), -1)
-    x = F.relu(self.conv1(x.view(-1, 4, 84, 84)))
-    x = F.relu(self.conv2(x))
-    x = F.relu(self.conv3(x))
-    x = x.view(x.size(0), -1)
-    x = F.relu(self.fc1(x))
-    x = self.fc2(x)
-    v, a = x.view(-1, 1, self.atoms), x.view(-1, self.action_space, self.atoms)
-    q = v + a - a.mean(1, keepdim=True)  # Combine streams
-    if log:  # Use log softmax for numerical stability
-        q = F.log_softmax(q, dim=2)  # Log probabilities with action over second dimension
+            nn.Conv2d(c, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU()
+        )
+        conv_output_size = self._get_conv_output(input_dim)
     else:
-        q = F.softmax(q, dim=2)  # Probabilities with action over second dimension
+        # Add alternative architectures here if needed
+        raise ValueError(f"Unknown architecture: {architecture}")
+    
+    # Common layers
+    self.fc_common = NoisyLinear(conv_output_size, hidden_size, std_init=noisy_std)
+    
+    # Value stream
+    self.fc_value = NoisyLinear(hidden_size, atoms, std_init=noisy_std)
+    
+    # Advantage stream
+    self.fc_rewards = NoisyLinear(hidden_size, output_dim * atoms, std_init=noisy_std)
+    
+  def _get_conv_output(self, shape):
+    o = self.convs(torch.zeros(1, *shape))
+    return int(np.prod(o.size()))
+    
+  def reset_noise(self):
+    self.fc_common.reset_noise()
+    self.fc_value.reset_noise()
+    self.fc_rewards.reset_noise()
+    
+  def features(self, x):
+    x = self.convs(x)
+    x = x.view(x.size(0), -1)
+    return F.relu(self.fc_common(x))
+    
+  def value_stream(self, x):
+    return self.fc_value(x)
+    
+  def advantage_stream(self, x):
+    return self.fc_rewards(x)
+    
+  def forward(self, x, log=False, return_distribution=False, ref_dist=None):
+    batch_size = x.size(0)
+    
+    # Extract features
+    features = self.features(x)
+    
+    # Value Stream
+    value = self.value_stream(features)
+    value = value.view(batch_size, 1, self.atoms)
+    
+    # Advantage Stream
+    advantage = self.advantage_stream(features)
+    advantage = advantage.view(batch_size, self.action_space, self.atoms)
+    
+    # Combine streams using dueling architecture
+    # Reshape advantage for group-wise normalization
+    grouped_advantage = []
+    for i in range(self.advantage_groups):
+        start_idx = self.group_cumsum[i]
+        end_idx = self.group_cumsum[i+1]
+        group_adv = advantage[:, start_idx:end_idx, :]
+        # Normalize within group
+        group_adv = group_adv - group_adv.mean(dim=1, keepdim=True)
+        grouped_advantage.append(group_adv)
+    
+    # Reconstruct the full advantage tensor
+    normalized_advantage = torch.cat(grouped_advantage, dim=1)
+    
+    # Combine value and advantage
+    q_dist = value + normalized_advantage
+    
+    if log:
+        q_dist = F.log_softmax(q_dist, dim=2)
+    else:
+        q_dist = F.softmax(q_dist, dim=2)
     
     if return_distribution:
-        return q
+        return q_dist
     else:
-        # Calculate the expected Q-values
-        support = torch.linspace(-10, 10, self.atoms, device=x.device)  # Adjust support values as needed
-        q_values = (q * support).sum(2)
+        # Calculate expected Q-values using the support
+        q_values = (q_dist * self.support.to(x.device)).sum(2)
         return q_values
-
-  def reset_noise(self):
-    for name, module in self.named_children():
-      if 'fc' in name:
-        module.reset_noise()

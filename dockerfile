@@ -49,10 +49,10 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Ensure pip is below version 24.1
-RUN pip install "pip<24.1" wheel==0.36.2 setuptools==56.0.0
+RUN uv pip install --system "pip<24.1" wheel==0.36.2 setuptools==56.0.0
 
 # Install the dependencies from requirements.txt
-RUN pip install -r requirements.txt
+RUN uv pip install --system -r requirements.txt
 
 # Create necessary directories for X11
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix

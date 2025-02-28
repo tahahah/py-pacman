@@ -54,18 +54,19 @@ MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 class PacmanAgent:
-    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_deepseek_consult"):
-        self.policy_net = DQN(input_dim, output_dim).to(device)
-        self.target_net = DQN(input_dim, output_dim).to(device)
+    def __init__(self, input_dim, output_dim, model_name="pacman_policy_net_gamengen_1_rainbow_negative_pellet_reward_deepseek_consult", n_steps=3, advantage_groups=4):
+        self.policy_net = DQN(input_dim, output_dim, advantage_groups=advantage_groups).to(device)
+        self.target_net = DQN(input_dim, output_dim, advantage_groups=advantage_groups).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.0001, eps=1e-5)
         self.steps_done = 0
         self.atoms = 51  # Number of atoms for distributional RL
-        self.v_min = -20  # Minimum value to account for death + remaining pellets penalty
-        self.v_max = 30   # Maximum value to account for ghost eating, pellet streaks, and accumulated survival bonus
+        self.v_min = -60  # Minimum value to account for death + remaining pellets penalty
+        self.v_max = 80   # Maximum value to account for ghost eating, pellet streaks, and accumulated survival bonus
         self.support = torch.linspace(self.v_min, self.v_max, self.atoms).to(device)
         self.delta_z = (self.v_max - self.v_min) / (self.atoms - 1)
+        self.n_steps = n_steps  # Number of steps for multi-step learning
 
         # Try to load the model from Hugging Face if it exists
         self.pretrained_model = None
@@ -90,7 +91,7 @@ class PacmanAgent:
                 action = q_values.max(1)[1].item()
                 return action
 
-    def projection_distribution(self, next_dist, rewards, dones):
+    def projection_distribution(self, next_dist, rewards, dones, gamma=0.95):
         """Project next state distribution onto current state."""
         batch_size = rewards.size(0)
         
@@ -100,7 +101,9 @@ class PacmanAgent:
         
         # Calculate projected values: R + γz (no reward for terminal states)
         support = self.support.unsqueeze(0).expand(batch_size, -1)
-        Tz = rewards + (1 - dones) * 0.95 * support  # gamma = 0.95
+        # Use gamma^n_steps for n-step returns
+        gamma_n = gamma ** self.n_steps
+        Tz = rewards + (1 - dones) * gamma_n * support  # Adjusted for n-step returns
         Tz = Tz.clamp(min=self.v_min, max=self.v_max)
         
         # Get index of projected value
@@ -112,21 +115,15 @@ class PacmanAgent:
         l[(u > 0) * (l == u)] -= 1
         u[(l < (self.atoms - 1)) * (l == u)] += 1
         
-        # Distribute probability
-        projected_dist = torch.zeros_like(next_dist)
-        offset = torch.linspace(0, ((batch_size - 1) * self.atoms), batch_size).unsqueeze(1).expand(batch_size, self.atoms).to(device)
+        # Vectorized probability distribution calculation
+        m = torch.zeros(batch_size, self.atoms, device=next_dist.device)
+        offset = torch.linspace(0, ((batch_size - 1) * self.atoms), batch_size, device=next_dist.device).unsqueeze(1)
         
-        proj_dist = torch.zeros(batch_size, self.atoms, device=device)
-        for atom_idx in range(self.atoms):
-            tz = Tz[:, atom_idx]
-            bz = b[:, atom_idx]
-            lz = l[:, atom_idx]
-            uz = u[:, atom_idx]
-            
-            proj_dist.add_(next_dist[:, atom_idx].unsqueeze(1) * (uz.float() - bz).unsqueeze(1))
-            proj_dist.add_(next_dist[:, atom_idx].unsqueeze(1) * (bz - lz.float()).unsqueeze(1))
-            
-        return proj_dist
+        # Project probabilities efficiently using index_add_
+        m.view(-1).index_add_(0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1))
+        m.view(-1).index_add_(0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1))
+        
+        return m
 
     def optimize_model(self, memory, gamma=0.95, pellets_left=0):
         if len(memory) < 32:  # Ensure there are enough samples in the memory
@@ -134,12 +131,9 @@ class PacmanAgent:
 
         state, next_state, action, reward, done, indices, weights = memory.sample(32)
         
-        # Convert states to float32
-        state = state.astype(np.float32) / 255.0
-        next_state = next_state.astype(np.float32) / 255.0
-        
-        state = torch.tensor(np.array(state), device=device, dtype=torch.float32).unsqueeze(0) / 255.0
-        next_state = torch.tensor(np.array(next_state), device=device, dtype=torch.float32).unsqueeze(0) / 255.0
+        # Convert states to float32 and normalize once
+        state = torch.tensor(state.astype(np.float32), device=device) / 255.0
+        next_state = torch.tensor(next_state.astype(np.float32), device=device) / 255.0
         action = torch.tensor(action, device=device, dtype=torch.long)
         reward = torch.tensor(reward, device=device, dtype=torch.float32)
         done = torch.tensor(done, device=device, dtype=torch.float32)
@@ -149,15 +143,15 @@ class PacmanAgent:
         dist = self.policy_net(state, return_distribution=True)
         dist = dist[range(32), action]  # Select the distribution for taken actions
 
-        # Get next state distribution
+        # Get next state distribution using Double DQN
         with torch.no_grad():
-            # Double DQN: Use online network to select action, target network to get distribution
+            # Use online network to select action, target network to get distribution
             next_actions = self.policy_net(next_state).max(1)[1]
             next_dist = self.target_net(next_state, return_distribution=True)
             next_dist = next_dist[range(32), next_actions]
 
-            # Project next state distribution
-            proj_dist = self.projection_distribution(next_dist, reward, done)
+            # Project next state distribution with n-step returns
+            proj_dist = self.projection_distribution(next_dist, reward, done, gamma)
 
         # Calculate cross-entropy loss
         loss = -(proj_dist * dist.log()).sum(1)
@@ -169,6 +163,7 @@ class PacmanAgent:
             target_q = (proj_dist * self.support).sum(1)
             td_errors = torch.abs(current_q - target_q)
 
+        # Optimize the network
         self.optimizer.zero_grad()
         weighted_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
@@ -235,6 +230,7 @@ class PacmanTrainer:
         self.log_video_to_wandb = log_video_to_wandb
         logging.basicConfig(level=logging.warning, format='%(asctime)s - %(levelname)s - %(message)s')
         self.memory_limit_gb = 10
+        self.advantage_groups = 4
         
     def _create_environment(self):
         env = PacmanEnv(layout=self.layout)
@@ -353,8 +349,8 @@ class PacmanTrainer:
         screen = self.env.reset(mode='rgb_array')
         n_actions = self.env.action_space.n
 
-        self.agent = PacmanAgent(screen.shape, n_actions)
-        self.memory = ReplayBuffer(100000)  # Increased capacity for better sampling
+        self.agent = PacmanAgent(screen.shape, n_actions, n_steps=3, advantage_groups=self.advantage_groups)
+        self.memory = ReplayBuffer(100000, n_steps=3, gamma=0.95)  # Initialize with n_steps parameter
 
         frames_buffer, actions_buffer = [], []
         max_batch_size = 500 * 1024 * 1024  # 400 MB
