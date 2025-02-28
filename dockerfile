@@ -28,11 +28,15 @@ RUN mkdir -p /var/lib/apt/lists/partial && chmod -R 755 /var/lib/apt/lists
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install Python 3.8.2 using uv
-RUN uv python install 3.8.2
 
 # Set the working directory in the container
 WORKDIR /app
+
+RUN uv venv --python=3.8.2 /opt/venv
+# Use the virtual environment automatically
+ENV VIRTUAL_ENV=/opt/venv
+# Place entry points in the environment at the front of the path
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy only the requirements file first
 COPY requirements.txt .
