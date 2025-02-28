@@ -101,7 +101,7 @@ class PacmanAgent:
         dones = dones.unsqueeze(1).expand(-1, self.atoms)
         
         # Calculate projected values: R + γz (no reward for terminal states)
-        support = self.support.unsqueeze(0).expand(batch_size, -1)
+        support = self.support.to(next_dist.device).unsqueeze(0).expand(batch_size, -1)
         # Use gamma^n_steps for n-step returns
         gamma_n = gamma ** self.n_steps
         Tz = rewards + (1 - dones) * gamma_n * support  # Adjusted for n-step returns
@@ -118,11 +118,11 @@ class PacmanAgent:
         
         # Vectorized probability distribution calculation
         m = torch.zeros(batch_size, self.atoms, device=next_dist.device)
-        offset = torch.linspace(0, ((batch_size - 1) * self.atoms), batch_size, device=next_dist.device).unsqueeze(1)
+        offset = torch.linspace(0, ((batch_size - 1) * self.atoms), batch_size, device=next_dist.device).long().unsqueeze(1)
         
         # Project probabilities efficiently using index_add_
-        m.view(-1).index_add_(0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1))
-        m.view(-1).index_add_(0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1))
+        m.view(-1).index_add_(0, (l + offset).view(-1).long(), (next_dist * (u.float() - b)).view(-1))
+        m.view(-1).index_add_(0, (u + offset).view(-1).long(), (next_dist * (b - l.float())).view(-1))
         
         return m
 
@@ -161,8 +161,8 @@ class PacmanAgent:
         
         # Calculate TD errors for priority updating (using mean predicted Q-values)
         with torch.no_grad():
-            current_q = (dist * self.support).sum(1)
-            target_q = (proj_dist * self.support).sum(1)
+            current_q = (dist * self.support.to(dist.device)).sum(1)
+            target_q = (proj_dist * self.support.to(proj_dist.device)).sum(1)
             td_errors = torch.abs(current_q - target_q)
 
         # Optimize the network

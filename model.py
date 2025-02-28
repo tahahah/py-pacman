@@ -80,7 +80,7 @@ class DQN(nn.Module):
     
     # Define value range for distributional RL
     self.v_min, self.v_max = -60, 80
-    self.support = torch.linspace(self.v_min, self.v_max, self.atoms)
+    self.support = torch.linspace(self.v_min, self.v_max, self.atoms).to(device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
     self.delta_z = (self.v_max - self.v_min) / (self.atoms - 1)
     
     # Feature extraction layers
