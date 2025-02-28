@@ -28,12 +28,24 @@ fi
 
 # Start Xvfb
 Xvfb :99 -screen 0 1024x768x24 &
+XVFB_PID=$!
+
+# Wait for Xvfb to start
+sleep 2
+
+# Check if Xvfb started successfully
+if ! ps -p $XVFB_PID > /dev/null; then
+    echo "Error: Xvfb failed to start"
+    exit 1
+fi
 
 # Set the DISPLAY environment variable
 export DISPLAY=:99
 
-# Start a virtual sound device
-modprobe snd-dummy
+# Try to start a virtual sound device, but continue if it fails
+if ! modprobe snd-dummy 2>/dev/null; then
+    echo "Warning: Could not load snd-dummy module. Audio may not work."
+fi
 
 # Configure ALSA to use the dummy sound card
 cat <<EOL > ~/.asoundrc
@@ -48,7 +60,17 @@ ctl.!default {
 EOL
 
 # Run your Python script with unbuffered output and redirect output to both console and log file
-python -u dqn_pytorch.py -lay classic -e 30000001 -t -frs 4 | tee /dev/tty
+echo "Starting Pac-Man Reinforcement Learning with Rainbow DQN..."
+python -u dqn_pytorch.py -lay classic -e 30000001 -t -frs 4 | tee /app/training.log
 
-# Keep the container running
-tail -f /dev/null
+# If the Python script exits, clean up Xvfb
+if ps -p $XVFB_PID > /dev/null; then
+    echo "Shutting down Xvfb..."
+    kill $XVFB_PID
+fi
+
+# Keep the container running only if explicitly requested
+if [ "$1" = "keep-alive" ]; then
+    echo "Keeping container alive as requested..."
+    tail -f /dev/null
+fi
