@@ -363,7 +363,6 @@ class PacmanTrainer:
         max_batch_size = 500 * 1024 * 1024  # 500 MB
         
         # Add memory monitoring
-        import psutil
         memory_process = psutil.Process()
         
         # Get the base environment to access the render method
@@ -555,10 +554,9 @@ class PacmanTrainer:
                       sum([sys.getsizeof(action) for action in actions_buffer])
         return buffer_size
     def _get_epsilon(self, frame_idx):
-        # Start with a lower initial epsilon and decay slower
         initial_epsilon = 0.99  # Continue from last run
         min_epsilon = 0.05      # Minimum exploration rate
-        decay_rate = 500000    # Slower decay rate
+        decay_rate = 150000     # 2x faster decay rate
 
         return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
     
