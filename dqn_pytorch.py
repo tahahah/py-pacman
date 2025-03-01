@@ -554,7 +554,7 @@ class PacmanTrainer:
                       sum([sys.getsizeof(action) for action in actions_buffer])
         return buffer_size
     def _get_epsilon(self, frame_idx):
-        initial_epsilon = 0.99  # Continue from last run
+        initial_epsilon = 0.93  # Continue from last run
         min_epsilon = 0.05      # Minimum exploration rate
         decay_rate = 150000     # 2x faster decay rate
 
