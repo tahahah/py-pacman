@@ -35,6 +35,7 @@ class ActionEncoder():
             "up"    :   2,
             "right" :   1,
             "down"  :   3,
+            "no_action": 4,
         }
 
     def __call__(self, action: str) -> np.ndarray:
@@ -69,7 +70,7 @@ class ActionEncoder():
         """
         one_hot_encoding = np.zeros(4)
         if isinstance(action, str):
-            one_hot_encoding[self.__dir2mv[action.lower()][0]] = 1
+            one_hot_encoding[self.__dir2mv[action.lower()]] = 1
         elif isinstance(action, int) and action in range(4):
             one_hot_encoding[action] = 1
         return one_hot_encoding
@@ -93,8 +94,31 @@ class ActionEncoder():
         if index.size == 0:
             return None
         for action, idx in self.__dir2mv.items():
-            if index[0][0] == idx[0]:
+            if index[0][0] == idx:
                 return action
+        return None
+    
+    def decode_num(self, num: int) -> str:
+        """
+        Decodes an integer into an action string.
+
+        Parameters
+        ----------
+        num : int
+            The integer to decode.
+
+        Returns
+        -------
+        str or None
+            The decoded action string, or None if the number is invalid.
+        """
+        if not isinstance(num, int) or num not in range(5):
+            return None
+        
+        for action, idx in self.__dir2mv.items():
+            if num == idx:
+                return action
+        
         return None
 
     def validate_action(self, action: str) -> bool:

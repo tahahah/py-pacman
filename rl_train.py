@@ -1,0 +1,750 @@
+import argparse
+
+import logging
+from typing import Any, List
+import json
+import math
+import os
+import pickle
+import queue
+import sys
+from collections import namedtuple
+from itertools import count
+from ActionEncoder import ActionEncoder
+import huggingface_hub
+import numpy as np
+import redis
+import torch
+import time
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torchvision.transforms as T
+import wandb
+import zstandard as zstd
+from datasets import Dataset
+from dotenv import load_dotenv
+from gymnasium.wrappers.stateful_observation import FrameStackObservation
+from PIL import Image
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError, TimeoutError
+from redis.retry import Retry
+import gc
+import psutil
+import pygame as pg
+
+from replay_buffer import ReplayBuffer
+from src.env.pacman_env import PacmanEnv
+from wrappers import GrayScaleObservation, ResizeObservation, SkipFrame
+from model import DQN
+# Load environment variables from .env file
+load_dotenv()
+wandb.login(key=os.getenv('WANDB_API_KEY'))
+wandb.init(project="PacmanDataGen", job_type="pacman")
+
+# Get HF_TOKEN from environment variables
+HF_TOKEN = os.getenv('HF_TOKEN')
+
+# if gpu is to be used
+USE_CUDA = torch.cuda.is_available()
+device = torch.device("cuda" if USE_CUDA else "cpu")
+logging.warning(f"CUDA available: {USE_CUDA}")
+
+Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
+
+MAX_MESSAGE_SIZE = 500 * 1024 * 1024  # 500 MB
+
+from stable_baselines3 import PPO
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
+
+class PacmanAgent:
+    def __init__(self, input_dim, output_dim, model_name="pacman_PPO_sb3", n_steps=3, advantage_groups=4):
+        self.policy_net = DQN(input_dim, output_dim, advantage_groups=advantage_groups).to(device)
+        self.target_net = DQN(input_dim, output_dim, advantage_groups=advantage_groups).to(device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.0001, eps=1e-5)
+        self.steps_done = 0
+        self.atoms = 51  # Number of atoms for distributional RL
+        self.v_min = -60  # Minimum value to account for death + remaining pellets penalty
+        self.v_max = 80   # Maximum value to account for ghost eating, pellet streaks, and accumulated survival bonus
+        self.support = torch.linspace(self.v_min, self.v_max, self.atoms).to(device)
+        self.delta_z = (self.v_max - self.v_min) / (self.atoms - 1)
+        self.n_steps = n_steps  # Number of steps for multi-step learning
+
+        # Try to load the model from Hugging Face if it exists
+        self.pretrained_model = None
+        self.model_name = model_name
+        try:
+            huggingface_hub.login(token=HF_TOKEN)
+            model_path = huggingface_hub.hf_hub_download(repo_id=f"Tahahah/{self.pretrained_model if self.pretrained_model else self.model_name}", filename="checkpoints/pacman.pth", repo_type="model")
+            state_dict = torch.load(model_path, map_location=device)
+            self.policy_net.load_state_dict(state_dict)
+            self.target_net.load_state_dict(state_dict)
+            logging.warning(f"Model loaded from Hugging Face: {self.model_name}")
+        except Exception as e:
+            logging.warning(f"Could not load model from Hugging Face: {e}")
+
+    def select_action(self, state, epsilon, n_actions):
+        if np.random.rand() < epsilon:
+            return np.random.randint(n_actions)
+        else:
+            with torch.no_grad():
+                state = torch.tensor(np.array(state), device=device, dtype=torch.float32).unsqueeze(0) / 255.0
+                # Get q_values directly from the model, no need to average over atoms
+                q_values = self.policy_net(state, return_distribution=False)
+                action = q_values.max(1)[1].item()
+                return action
+
+    def projection_distribution(self, next_dist, rewards, dones, gamma=0.95):
+        """Project next state distribution onto current state."""
+        batch_size = rewards.size(0)
+        
+        # Expand rewards and dones to match distribution shape
+        rewards = rewards.unsqueeze(1).expand(-1, self.atoms)
+        dones = dones.unsqueeze(1).expand(-1, self.atoms)
+        
+        # Calculate projected values: R + γz (no reward for terminal states)
+        support = self.support.to(next_dist.device).unsqueeze(0).expand(batch_size, -1)
+        # Use gamma^n_steps for n-step returns
+        gamma_n = gamma ** self.n_steps
+        Tz = rewards + (1 - dones) * gamma_n * support  # Adjusted for n-step returns
+        Tz = Tz.clamp(min=self.v_min, max=self.v_max)
+        
+        # Get index of projected value
+        b = (Tz - self.v_min) / self.delta_z
+        l = b.floor().long()
+        u = b.ceil().long()
+        
+        # Handle corner cases where value equals support
+        l[(u > 0) * (l == u)] -= 1
+        u[(l < (self.atoms - 1)) * (l == u)] += 1
+        
+        # Vectorized probability distribution calculation
+        m = torch.zeros(batch_size, self.atoms, device=next_dist.device)
+        offset = torch.linspace(0, ((batch_size - 1) * self.atoms), batch_size, device=next_dist.device).long().unsqueeze(1)
+        
+        # Project probabilities efficiently using index_add_
+        m.view(-1).index_add_(0, (l + offset).view(-1).long(), (next_dist * (u.float() - b)).view(-1))
+        m.view(-1).index_add_(0, (u + offset).view(-1).long(), (next_dist * (b - l.float())).view(-1))
+        
+        return m
+
+    def optimize_model(self, memory, gamma=0.95, pellets_left=0):
+        if len(memory) < 32:  # Ensure there are enough samples in the memory
+            return
+
+        state, next_state, action, reward, done, indices, weights = memory.sample(32)
+        
+        # Convert states to float32 and normalize once
+        state = torch.tensor(state, device=device, dtype=torch.float32) / 255.0
+        next_state = torch.tensor(next_state, device=device, dtype=torch.float32) / 255.0
+        action = torch.tensor(action, device=device, dtype=torch.long)
+        reward = torch.tensor(reward, device=device, dtype=torch.float32)
+        done = torch.tensor(done, device=device, dtype=torch.float32)
+        weights = torch.tensor(weights, device=device, dtype=torch.float32)
+
+        # Get current state distribution
+        dist = self.policy_net(state, return_distribution=True)
+        dist = dist[range(32), action]  # Select the distribution for taken actions
+
+        # Get next state distribution using Double DQN
+        with torch.no_grad():
+            # Use online network to select action, target network to get distribution
+            next_q_values = self.policy_net(next_state, return_distribution=False)
+            next_actions = next_q_values.max(1)[1]
+            next_dist = self.target_net(next_state, return_distribution=True)
+            next_dist = next_dist[range(32), next_actions]
+
+            # Project next state distribution with n-step returns
+            proj_dist = self.projection_distribution(next_dist, reward, done, gamma)
+
+        # Calculate cross-entropy loss
+        loss = -(proj_dist * dist.log()).sum(1)
+        weighted_loss = (weights * loss).mean()
+        
+        # Calculate TD errors for priority updating (using mean predicted Q-values)
+        with torch.no_grad():
+            current_q = (dist * self.support.to(dist.device)).sum(1)
+            target_q = (proj_dist * self.support.to(proj_dist.device)).sum(1)
+            td_errors = torch.abs(current_q - target_q)
+
+        # Optimize the network
+        self.optimizer.zero_grad()
+        weighted_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
+        self.optimizer.step()
+
+        # Reset noise for all noisy layers
+        self.policy_net.reset_noise()
+        self.target_net.reset_noise()
+
+        # Update priorities in the replay buffer
+        memory.update_priorities(indices, td_errors.cpu().numpy())
+        
+        # Explicitly clean up tensors to prevent memory leaks
+        del state, next_state, action, reward, done, weights
+        del dist, next_q_values, next_actions, next_dist, proj_dist
+        del loss, weighted_loss, current_q, target_q, td_errors
+        
+    def update_target_network(self):
+        # Hard update of target network: θ_target = θ_policy
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save_model(self, filename):
+        # Save the model locally
+        torch.save(self.policy_net.state_dict(), filename)
+        
+        # Save the model to Hugging Face
+        huggingface_hub.login(token=HF_TOKEN)
+
+        repo_id = f"Tahahah/{self.model_name}"
+        try:
+            huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=repo_id, repo_type="model")
+        except huggingface_hub.utils.RepositoryNotFoundError:
+            huggingface_hub.create_repo(repo_id, repo_type="model")
+            huggingface_hub.upload_file(path_or_fileobj=filename, path_in_repo=f"checkpoints/{filename}", repo_id=repo_id, repo_type="model")
+
+        logging.warning(f"RL Model saved locally as {filename} and uploaded to Hugging Face as {self.model_name}")
+
+    @classmethod
+    def load_model(cls, input_dim, output_dim, filename):
+        agent = cls(input_dim, output_dim)
+        state_dict = torch.load(filename, map_location=device)
+        agent.policy_net.load_state_dict(state_dict)
+        agent.target_net.load_state_dict(state_dict)
+        return agent
+
+
+from pydantic import BaseModel, Field
+class DataRecord(BaseModel):
+    episode: int
+    frames: List[Any]
+    actions: List[int]
+    batch_id: int
+    is_last_batch: bool
+
+class PacmanTrainer:
+    def __init__(self, layout, episodes, frames_to_skip, save_locally, enable_rmq, log_video_to_wandb=True):
+        self.layout = layout
+        self.episodes = episodes
+        self.frames_to_skip = frames_to_skip
+        self.env = self._create_environment()
+        self.agent = None
+        self.memory = None
+        self.save_queue = queue.Queue()
+        self.connection = None
+        self.channel = None
+        self.save_locally = save_locally | False
+        self.enable_rmq = enable_rmq
+        self.action_encoder = ActionEncoder()
+        self.log_video_to_wandb = log_video_to_wandb
+        logging.basicConfig(level=logging.warning, format='%(asctime)s - %(levelname)s - %(message)s')
+        self.memory_limit_gb = 10
+        self.advantage_groups = 4
+        
+    def _create_environment(self):
+        env = PacmanEnv(layout=self.layout)
+        env = SkipFrame(env, skip=self.frames_to_skip)
+        env = GrayScaleObservation(env)
+        env = ResizeObservation(env, shape=84)  # Changed from 84 to 128
+        # env = FrameStackObservation(env, stack_size=4)
+        # env = make_vec_env(env, n_envs=16) # TODO: Add support for vectorized environments
+        return env
+
+    def _setup_rabbitmq(self):
+        if not self.enable_rmq:
+            return
+
+        import pika
+
+        # Set up the connection to RabbitMQ
+        credentials = pika.PlainCredentials('pacman', 'pacman_pass')
+        parameters = pika.ConnectionParameters(
+            'rabbitmq-host',
+            5672,
+            '/',
+            credentials
+        )
+        self.connection = pika.BlockingConnection(parameters)
+        self.channel = self.connection.channel()
+
+        # Declare the queue
+        self.channel.queue_declare(queue='HF_upload_queue')
+        
+        # Create redis client with retry mechanism
+        self.redis_client = redis.StrictRedis(
+            host='redis', 
+            port=6379, 
+            db=0, 
+            decode_responses=False, 
+            password="pacman", 
+            health_check_interval=30, 
+            socket_keepalive=True,
+            retry=Retry(ExponentialBackoff(cap=10, base=1), 25),
+            retry_on_error=[ConnectionError, TimeoutError]
+        )
+        self.episode_keys_buffer = []
+
+    def _close_rabbitmq(self):
+        if self.connection:
+            self.connection.close()
+
+    def _save_data_to_redis(self, episode, frames_buffer, actions_buffer):
+        logging.warning("_save_data_to_redis invoked")
+        key = f"episode_{episode}"
+        
+        # Serialize data using pickle
+        data = {
+            'episode': episode,
+            'frames': frames_buffer,
+            'actions': actions_buffer
+        }
+        serialized_data = pickle.dumps(data)
+        
+        # Compress the serialized data
+        cctx = zstd.ZstdCompressor()
+        compressed_data = cctx.compress(serialized_data)
+        
+        # Log the sizes of the serialized and compressed data
+        original_size = sys.getsizeof(serialized_data)
+        compressed_size = len(compressed_data)
+        compression_ratio = compressed_size / original_size
+        logging.warning(f"Original size: {original_size} bytes, Compressed size: {compressed_size} bytes, Compression ratio: {compression_ratio:.2f}")
+        
+        # Clear the original buffers to free memory
+        frames_buffer.clear()
+        actions_buffer.clear()
+        
+        # Log the data being saved
+        logging.warning(f"Saving compressed data for episode {episode} to Redis with key {key}")
+        
+        self.redis_client.set(key, compressed_data)
+        self.episode_keys_buffer.append(key)
+
+        del data
+        del serialized_data
+        del compressed_data
+        
+        # Log the current buffer size
+        logging.warning(f"Current episode keys buffer size: {len(self.episode_keys_buffer)}")
+
+        # Publish keys to the queue every 20 episodes
+        if len(self.episode_keys_buffer) >= 20:
+            logging.warning("Buffer size reached 20, publishing keys to queue")
+            self._publish_keys_to_queue()
+            self.episode_keys_buffer.clear()
+            logging.warning("Episode keys buffer cleared after publishing")
+
+    def _publish_keys_to_queue(self):
+        if self.enable_rmq:
+            message = json.dumps(self.episode_keys_buffer)
+            self.channel.basic_publish(exchange='', routing_key='HF_upload_queue', body=message)
+            logging.warning(f"Published keys to RabbitMQ queue 'HF_upload_queue': {self.episode_keys_buffer}")
+
+    def check_memory(self):
+        process = psutil.Process()
+        mem_gb = process.memory_info().rss / 1024**3
+        if mem_gb > self.memory_limit_gb:
+            self.cleanup_memory()
+            print(f"Memory usage exceeded {self.memory_limit_gb}GB, cleaned up")
+
+    def cleanup_memory(self):
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    def train(self):
+        if self.enable_rmq:
+            self._setup_rabbitmq()
+        
+        pg.init()
+        clock = pg.time.Clock()
+        
+        screen = self.env.reset()
+        n_actions = self.env.action_space.n
+
+        self.agent = PacmanAgent(screen.shape, n_actions, n_steps=3, advantage_groups=self.advantage_groups)
+        self.memory = ReplayBuffer(100000, n_steps=3, gamma=0.95)  # Initialize with n_steps parameter
+
+        frames_buffer, actions_buffer = [], []
+        max_batch_size = 500 * 1024 * 1024  # 500 MB
+        
+        # Add memory monitoring
+        memory_process = psutil.Process()
+        
+        # Get the base environment to access the render method
+        base_env = self.env
+        while hasattr(base_env, 'env'):
+            base_env = base_env.env
+            
+
+        for i_episode in range(self.episodes):
+            state = self.env.reset()
+            ep_reward = 0.
+            epsilon = self._get_epsilon(i_episode)
+            logging.warning("-----------------------------------------------------")
+            logging.warning(f"Starting episode {i_episode} with epsilon {epsilon}")
+            
+            # Log neural network input visualization at the start of each episode
+            if i_episode % 1000 == 0:  # Log every 5 episodes
+                nn_input_vis = get_nn_input_visualization(self.env, state)
+                wandb.log({
+                    "nn_input": wandb.Image(nn_input_vis, caption=f"Neural Network Input (Episode {i_episode})")
+                })
+            
+            for t in count():
+                try:
+                    previous_frame = current_frame
+                except:
+                    pass
+                # Use the base environment's render method to get the frame
+                current_frame = base_env.render(mode='rgb_array')
+                self.env.render(mode='human')
+
+                action = self.agent.select_action(state, epsilon, n_actions)
+                next_state, reward, done, _ = self.env.step(action)
+                reward = max(-1.0, min(reward, 1.0))
+                ep_reward += reward
+                
+                if self.enable_rmq or self.save_locally or (i_episode % 1000 == 0 and self.log_video_to_wandb):
+                    frames_buffer.append(current_frame)
+                    actions_buffer.append(self.action_encoder(action))
+                    
+                    # Limit the size of frames_buffer to prevent memory issues
+                    if len(frames_buffer) > 1000:  # Cap at 1000 frames
+                        logging.warning(f"Frames buffer exceeded 1000 frames, saving data...")
+                        if self.enable_rmq:
+                            self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
+                        elif self.save_locally:
+                            self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
+                        frames_buffer.clear()
+                        actions_buffer.clear()
+                        gc.collect()
+                    
+                # Convert states to uint8 before storage
+                state_array = np.array(state)
+                state_uint8 = (state_array * 255).astype(np.uint8)
+                next_state_array = np.array(next_state)
+                next_state_uint8 = (next_state_array * 255).astype(np.uint8)
+                self.memory.cache(state_uint8, next_state_uint8, action, reward, done)
+
+                # Clear variables to free memory
+                del state_array
+                del next_state_array
+                
+                state = next_state if not done else None
+                if t%4==0:
+                    self.agent.optimize_model(self.memory, gamma=0.95, pellets_left=self.env.maze.get_number_of_pellets())
+                    
+                    # Check memory usage periodically and force garbage collection if needed
+                    if t % 100 == 0:
+                        memory_info = memory_process.memory_info()
+                        memory_usage_percent = memory_process.memory_percent()
+                        if memory_usage_percent > 80:  # If using more than 80% of available memory
+                            logging.warning(f"High memory usage detected: {memory_usage_percent:.1f}% - {memory_info.rss / (1024 * 1024):.1f} MB")
+                            gc.collect()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                if done:
+                    pellets_left = self.env.maze.get_number_of_pellets()
+                    if self.save_locally:
+                        self._save_frames_locally(frames=frames_buffer, episode=i_episode, actions=actions_buffer)
+                    logging.warning(f"Episode #{i_episode} finished after {t + 1} timesteps with total reward: {ep_reward} and {pellets_left} pellets left.")
+                    
+                    # Log the reward to wandb
+                    wandb.log({"episode": i_episode, "reward": ep_reward, "pellets_left": pellets_left, "epsilon": epsilon})
+                    
+                    # Force garbage collection at the end of each episode
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    # Log memory usage at the end of each episode
+                    memory_info = memory_process.memory_info()
+                    memory_usage_percent = memory_process.memory_percent()
+                    logging.warning(f"Memory usage: {memory_usage_percent:.1f}% - {memory_info.rss / (1024 * 1024):.1f} MB")
+                    
+                    break
+
+                # Check if the batch size limit is reached
+            if self.enable_rmq:
+                buffer_size = self._get_buffer_size(frames_buffer, actions_buffer)
+                logging.warning(f"Buffer size: {buffer_size} bytes")
+                if buffer_size >= max_batch_size:
+                    logging.warning("BUFFER SIZE EXCEEDING 500MB")
+                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
+                # batch_id += 1
+
+            # Send remaining data at the end of the episode
+            if frames_buffer and self.enable_rmq:
+                self._save_data_to_redis(i_episode, frames_buffer, actions_buffer)
+            
+
+            if i_episode > 2: 
+                if i_episode % 100 == 0:
+                    self.agent.update_target_network()
+                    logging.warning(f"Updated target network at episode {i_episode}")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        logging.warning(torch.cuda.memory_summary())
+                    torch.autograd.set_detect_anomaly(True)
+                    
+                    # Monitor and log system memory usage
+                    memory_info = memory_process.memory_info()
+                    memory_usage_percent = memory_process.memory_percent()
+                    logging.warning(f"System memory usage: {memory_usage_percent:.1f}% - {memory_info.rss / (1024 * 1024):.1f} MB")
+                    
+                    # If memory usage is high, try to reduce it
+                    if memory_usage_percent > 85:
+                        logging.warning("Memory usage is high, performing additional cleanup...")
+                        # Clear any unnecessary data
+                        frames_buffer.clear()
+                        actions_buffer.clear()
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    
+                if i_episode % 1000 == 0:
+                    self.agent.save_model('pacman.pth')
+                    logging.warning(f"Saved model at episode {i_episode}")
+
+                
+                if i_episode % 1000 == 0 and frames_buffer:
+                    # Ensure frames are in the correct format and range
+                    frames = [np.array(frame).astype(np.uint8) for frame in frames_buffer]
+                    
+                    # Check if frames are already in range [0, 255], if not, scale them
+                    if frames[0].max() <= 1.0:
+                        frames = [frame * 255 for frame in frames]
+                    else:
+                        frames = frames_buffer.copy()
+                    
+                    # Stack frames
+                    frames = np.stack(frames)
+                    frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (time, channel, height, width)
+                    logging.warning(f"Video frames shape: {frames.shape}")
+                    
+                    try:
+                        # Create and log the video
+                        video = wandb.Video(frames, fps=10, format="mp4")
+                        wandb.log({
+                            "video": video,
+                            "image": wandb.Image(previous_frame) if 'previous_frame' in locals() else None,
+                        })
+                    except Exception as e:
+                        logging.warning(f"Failed to log video: {e}")
+                    finally:
+                        # Clear memory
+                        del frames
+                        if 'video' in locals():
+                            del video
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    
+                    # Clear buffers after saving/logging
+                    frames_buffer.clear()
+                    actions_buffer.clear()
+                    gc.collect()
+                    
+
+
+        logging.warning('Training Complete')
+        self.env.close()
+        self.agent.save_model('pacman.pth')
+        if self.enable_rmq:
+            self._close_rabbitmq()
+
+    def _get_buffer_size(self, frames_buffer, actions_buffer):
+        # Estimate the size of the buffers in bytes
+        buffer_size = sum([frame.nbytes for frame in frames_buffer]) + \
+                      sum([sys.getsizeof(action) for action in actions_buffer])
+        return buffer_size
+    def _get_epsilon(self, frame_idx):
+        initial_epsilon = 0.93  # Continue from last run
+        min_epsilon = 0.05      # Minimum exploration rate
+        decay_rate = 150000     # 2x faster decay rate
+
+        return min_epsilon + (initial_epsilon - min_epsilon) * math.exp(-1. * frame_idx / decay_rate)
+    
+    def _save_data(self, data_record: DataRecord):
+        self.save_queue.put(data_record)
+        if self.enable_rmq:
+            self._publish_to_rabbitmq(self.save_queue.get())
+
+    def _save_remaining_data(self, data_record: DataRecord):
+        if data_record.frames:
+            self._save_data(data_record)
+
+    def _publish_to_rabbitmq(self, data: DataRecord):
+        import pickle
+
+        # Serialize the data using pickle
+        message = pickle.dumps(data.dict())
+
+        # Publish the message to the queue
+        self.channel.basic_publish(exchange='',
+                                   routing_key='HF_upload_queue',
+                                   body=message)
+
+        logging.warning("Published dataset to RabbitMQ queue 'HF_upload_queue'")
+
+    def _save_frames_locally(self, frames, episode, actions):
+        # Create a directory for the episode if it doesn't exist
+        episode_dir = f"data/episode_{episode}_frs{self.frames_to_skip}"
+        if not os.path.exists(episode_dir):
+            os.makedirs(episode_dir)
+
+        # Save each frame as a PNG file with the episode and action in the filename
+        for idx, frame in enumerate(frames):
+            action = actions[idx]
+            # Check if the frame is completely black
+            if not np.any(frame):
+                logging.warning(f"Frame {idx} is completely black")
+            
+            filename = os.path.join(episode_dir, f"{idx:05d}.png")
+            Image.fromarray(frame).save(filename)
+            # logging.warning(f"Saved frame {idx} of episode {episode} with action {action} to {filename}")
+
+class PacmanRunner:
+    def __init__(self, layout):
+        self.layout = layout
+        self.env = self._create_environment()
+        self.agent = None
+
+    def _create_environment(self):
+        env = PacmanEnv(self.layout)
+        env = SkipFrame(env, skip=4)
+        env = GrayScaleObservation(env)
+        env = ResizeObservation(env, shape=84)  # Changed from 84 to 128
+        env = FrameStackObservation(env, num_stack=4)
+        return env
+
+    def run(self):
+        screen = self.env.reset()
+        n_actions = self.env.action_space.n
+
+        self.agent = PacmanAgent.load_model(screen.shape, n_actions, 'pacman.pth')
+
+        for _ in range(10):
+            screen = self.env.reset()
+            self.env.render(mode='human')
+
+            for _ in count():
+                self.env.render(mode='human')
+                action = self.agent.select_action(screen, 0, n_actions)
+                screen, _, done, _ = self.env.step(action)
+
+                if done:
+                    break
+
+def get_nn_input_visualization(env, state):
+    """
+    Create a visualization of the neural network input state.
+    
+    Args:
+        env: The wrapped environment
+        state: The current state
+        
+    Returns:
+        A numpy array of the visualization
+    """
+    import matplotlib.pyplot as plt
+    import io
+    import numpy as np
+    from PIL import Image
+    
+    # Get the base environment and processed state
+    base_env = env
+    processed_state = state
+    raw_screen = None
+    
+    # If it's a tensor, convert to numpy
+    if isinstance(processed_state, torch.Tensor):
+        processed_state = processed_state.cpu().numpy()
+    
+    # If using frame stacking (shape is [4,128,128]), take most recent frame
+    if len(processed_state.shape) == 3 and processed_state.shape[0] == 4:
+        processed_state = processed_state[0]
+    
+    # Create a figure with two subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    
+    # Get raw game screen from base environment
+    while hasattr(base_env, 'env'):
+        if isinstance(base_env, PacmanEnv):
+            raw_screen = base_env.get_screen_rgb_array()
+            break
+        base_env = base_env.env
+    
+    # If we couldn't get the raw screen, use the original state
+    if raw_screen is None:
+        raw_screen = state
+        if len(raw_screen.shape) == 3 and raw_screen.shape[0] == 4:
+            raw_screen = raw_screen[0]
+        if isinstance(raw_screen, torch.Tensor):
+            raw_screen = raw_screen.cpu().numpy()
+    
+    # Plot original game screen
+    ax1.imshow(raw_screen)
+    ax1.set_title('Game Screen')
+    ax1.axis('off')
+    
+    # Plot neural network input
+    ax2.imshow(processed_state, cmap='gray')
+    ax2.set_title('Neural Network Input (128x128)')  # Updated size in title
+    ax2.axis('off')
+    
+    # Add a main title
+    plt.suptitle(f'Input Processing Pipeline\nShape: {processed_state.shape}, Range: [{processed_state.min():.1f}, {processed_state.max():.1f}]')
+    
+    # Save plot to a numpy array
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    
+    # Convert to numpy array
+    img_arr = np.array(Image.open(buf))
+    buf.close()
+    
+    return img_arr
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Argument for the agent that interacts with the sm env')
+    parser.add_argument('-lay', '--layout', type=str, nargs=1,
+                        help="Name of layout to load in the game")
+    parser.add_argument('-t', '--train', action='store_true',
+                        help='Train the agent')
+    parser.add_argument('-e', '--episodes', type=int, nargs=1,
+                        help="The number of episode to use during training")
+    parser.add_argument('-frs', '--frames_to_skip', type=int, nargs=1,
+                        help="The number of frames to skip during training, so the agent doesn't have to take "
+                             "an action a every frame")
+    parser.add_argument('-r', '--run', action='store_true',
+                        help='run the trained agent')
+    parser.add_argument('-loc', '--save_locally', action='store_true',
+                        help='Save the frames')
+    parser.add_argument('-rmq', '--enable_rmq', action='store_true',
+                        help='Enable RabbitMQ for saving data')
+
+    args = parser.parse_args()
+    return args
+
+
+if __name__ == '__main__':
+    args = parse_args()
+    layout = args.layout[0]
+    episodes = args.episodes[0] if args.episodes else 1000
+
+    if args.train:
+        frames_to_skip = args.frames_to_skip[0] if args.frames_to_skip is not None else 4
+        trainer = PacmanTrainer(layout=layout, episodes=episodes, frames_to_skip=frames_to_skip, save_locally=args.save_locally, enable_rmq=args.enable_rmq)
+        trainer.train()
+
+    if args.run:
+        runner = PacmanRunner(layout)
+        runner.run()

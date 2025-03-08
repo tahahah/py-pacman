@@ -2,7 +2,7 @@ import logging
 
 import numpy as np
 
-from src.env.pacman_env import PacmanEnv
+from src.env.pacman_env_new import PacmanEnv
 from src.utils.action import Action
 from src.utils.game_mode import GameMode
 
