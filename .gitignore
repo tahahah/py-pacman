@@ -27,3 +27,11 @@ pacman-env-lin
 episode**
 **.mp4
 mazelib_env
+wandb
+videos
+ppo-pacman.zip
+models
+runs
+data
+training_observations
+training_observations_strange

@@ -6,10 +6,12 @@ Pillow
 pygame
 pygame-menu
 pyparsing
+python-dotenv
 pyperclip
 python-dateutil
 six
 gymnasium
+gymnasium[other]
 stable-baselines3[extra]
 torch
 torchvision

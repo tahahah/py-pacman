@@ -1,8 +1,8 @@
-import gym
+import gymnasium as gym
 import torch
 import numpy as np
 import torchvision.transforms as T
-from gym.spaces import Box
+from gymnasium.spaces import Box
 
 
 class SkipFrame(gym.Wrapper):
@@ -15,20 +15,21 @@ class SkipFrame(gym.Wrapper):
         """Repeat action, and sum reward"""
         total_reward = 0.0
         done = False
+        truncated = False
         for i in range(self._skip):
             # Accumulate reward and repeat the same action
-            obs, reward, done, info = self.env.step(action)
+            obs, reward, done, truncated, info = self.env.step(action)
             total_reward += reward
-            if done:
+            if done or truncated:
                 break
-        return obs, total_reward, done, info
+        return obs, total_reward, done, truncated, info
 
 
 class GrayScaleObservation(gym.ObservationWrapper):
     def __init__(self, env):
         super().__init__(env)
         obs_shape = self.observation_space.shape[:2]
-        self.observation_space = Box(low=0, high=255, shape=obs_shape, dtype=np.uint8)
+        self.observation_space = Box(low=0, high=255, shape=obs_shape, dtype=np.float32)
 
     def permute_orientation(self, observation):
         # permute [H, W, C] array to [C, H, W] tensor
@@ -52,7 +53,7 @@ class ResizeObservation(gym.ObservationWrapper):
             self.shape = tuple(shape)
 
         obs_shape = self.shape + self.observation_space.shape[2:]
-        self.observation_space = Box(low=0, high=255, shape=obs_shape, dtype=np.uint8)
+        self.observation_space = Box(low=0, high=255, shape=obs_shape, dtype=np.float32)
 
     def observation(self, observation):
         transforms = T.Compose(

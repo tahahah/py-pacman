@@ -127,6 +127,13 @@ class PacmanEnv(gym.Env):
         self.timer = 0
         self.reinit_game = False
         
+        # Ensure the game is drawn before capturing the observation
+        if self.enable_render and self.game.screen is not None:
+            # Clear the screen before drawing to prevent trail effect
+            self.game.screen.fill((0, 0, 0))
+            self.game.draw()
+            pg.display.flip()
+        
         # Return observation and info
         observation = self._get_obs()
         info = self._get_info()
@@ -189,6 +196,13 @@ class PacmanEnv(gym.Env):
         # In this environment, we don't have truncation (early stopping)
         truncated = False
         
+        # Ensure the game is drawn before capturing the observation
+        if self.enable_render and self.game.screen is not None:
+            # Clear the screen before drawing to prevent trail effect
+            self.game.screen.fill((0, 0, 0))
+            self.game.draw()
+            pg.display.flip()
+        
         # Get observation and info
         observation = self._get_obs()
         info = self._get_info()
@@ -215,7 +229,8 @@ class PacmanEnv(gym.Env):
             'state matrix': self.get_state_matrix(),
             'ghosts_pixel_pos': ghosts_pixel_pos,
             'player vel': self.game.player.get_vel(),
-            'player action': self.game.player.current_action
+            'player action': self.game.player.current_action,
+            'pellets left': self.maze.get_number_of_pellets()
         }
         return info
 
