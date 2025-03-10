@@ -73,7 +73,7 @@ class PacmanMetricsCallback(BaseCallback):
             
             # Add some metadata to the image
             plt.figtext(0.5, 0.01, 
-                       f"Action: {action}, Reward: {self.locals['rewards'][0]:.2f}, Pellets Left: {self.current_episode_pellets_left}",
+                       f"Action: {action}, Reward: {self.locals['rewards'][0]:.2f}, Pellets Left: {info.get('pellets left', 170)}",
                        ha="center", fontsize=10, weight='bold')
             
             # Log the figure to wandb
