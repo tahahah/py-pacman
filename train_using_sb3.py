@@ -180,7 +180,7 @@ except FileNotFoundError:
 
 # Create a list of callbacks
 callbacks = [
-    # PacmanMetricsCallback(save_freq=100),  # Our custom metrics callback
+    PacmanMetricsCallback(save_freq=100),  # Our custom metrics callback
     WandbCallback(
         gradient_save_freq=100,
         model_save_path=f"models/{run.id}",
