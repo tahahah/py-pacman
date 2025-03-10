@@ -47,25 +47,18 @@ class PacmanInfoWrapper(gym.ObservationWrapper):
 
 # Custom callback to log only relevant Pacman metrics
 class PacmanMetricsCallback(BaseCallback):
-    def __init__(self, verbose=0, save_freq=1000):
+    def __init__(self, verbose=0, save_freq=100000):
         super().__init__(verbose)
         self.save_freq = save_freq
         self.step_count = 0
-        os.makedirs("training_observations", exist_ok=True)
-        self.debug_log = open("training_observations/debug_log.txt", "w")
-        self.debug_log.write("Step,EnvIdx,Action,Reward,Done,EpisodeLen,PelletsLeft\n")
-        self.debug_log.flush()
     
     def _on_step(self):
         self.step_count += 1
+        
         info = self.locals["infos"][0]
-        if "pellets left" in info:
-            self.current_episode_pellets_left = info["pellets left"]
-        action = self.locals.get("actions", [None])[0]
-        done = self.locals["dones"][0]
-        self.debug_log.write(f"{self.step_count},,{action},{self.locals['rewards'][0]},{done},{self.current_episode_pellets_left}\n")
-        self.debug_log.flush()
         if self.step_count % self.save_freq == 0:
+            action = self.locals.get("actions", [None])[0]
+            done = self.locals["dones"][0]
             
             # Get the current observation from the selected environment
             obs = self.locals["new_obs"][0]  # Shape: (3, 84, 84)
@@ -95,7 +88,7 @@ class PacmanMetricsCallback(BaseCallback):
         if done:
             # Log episode stats
             wandb.log({
-                "rollout/pellets_left": self.current_episode_pellets_left
+                "train/pellets_left": info.get("pellets left", 170)
             })
             
         
@@ -146,10 +139,10 @@ if device == "cuda":
 # Initialize wandb
 config = {
     "policy_type": "CnnPolicy",
-    "total_timesteps": 1000000,
+    "total_timesteps": 10000000,
     "env_name": "PacmanEnv",
     "layout": "classic",
-    "n_steps": 128,
+    "n_steps": 256,
     "batch_size": 256,  # Increased from 32 to 256 for better GPU utilization
     "n_epochs": 4,
 }
@@ -166,18 +159,24 @@ run = wandb.init(
 os.makedirs(f"videos/{run.id}", exist_ok=True)
 os.makedirs(f"models/{run.id}", exist_ok=True)
 
-# Create the model with optimized parameters for GPU usage and memory efficiency
-model = PPO(
-    config["policy_type"], 
-    env, 
-    verbose=1,
-    n_steps=config["n_steps"],
-    batch_size=config["batch_size"],
-    n_epochs=config["n_epochs"],
-    device=device,
-    tensorboard_log=f"runs/{run.id}",
-    policy_kwargs={"normalize_images": False}  # Avoid unnecessary normalization
-)
+# Load a pretrained model if it exists, otherwise create a new one
+model_name = f"models/xask3fxp/ppo-pacman-final"
+try:
+    model = PPO.load(model_name, env=env, device=device)
+    print(f"Loaded pretrained model from {model_name}")
+except FileNotFoundError:
+    model = PPO(
+        config["policy_type"], 
+        env, 
+        verbose=1,
+        n_steps=config["n_steps"],
+        batch_size=config["batch_size"],
+        n_epochs=config["n_epochs"],
+        device=device,
+        tensorboard_log=f"runs/{run.id}",
+        policy_kwargs={"normalize_images": False}
+    )
+    print("Created new model")
 
 # Create a list of callbacks
 callbacks = [
