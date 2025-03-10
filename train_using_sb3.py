@@ -55,11 +55,10 @@ class PacmanMetricsCallback(BaseCallback):
     def _on_step(self):
         self.step_count += 1
         
+        action = self.locals.get("actions", [None])[0]
+        done = self.locals["dones"][0]
         info = self.locals["infos"][0]
         if self.step_count % self.save_freq == 0:
-            action = self.locals.get("actions", [None])[0]
-            done = self.locals["dones"][0]
-            
             # Get the current observation from the selected environment
             obs = self.locals["new_obs"][0]  # Shape: (3, 84, 84)
             
