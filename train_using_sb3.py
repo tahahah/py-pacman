@@ -141,7 +141,7 @@ if device == "cuda":
 # Initialize wandb
 config = {
     "policy_type": "CnnPolicy",
-    "total_timesteps": 10000000,
+    "total_timesteps": 20000000,
     "env_name": "PacmanEnv",
     "layout": "classic",
     "n_steps": 256,
