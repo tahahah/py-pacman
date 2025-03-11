@@ -54,43 +54,46 @@ class PacmanMetricsCallback(BaseCallback):
     
     def _on_step(self):
         self.step_count += 1
-        
-        action = self.locals.get("actions", [None])[0]
-        done = self.locals["dones"][0]
-        info = self.locals["infos"][0]
-        if self.step_count % self.save_freq == 0:
-            # Get the current observation from the selected environment
-            obs = self.locals["new_obs"][0]  # Shape: (3, 84, 84)
+        try:
+            action = self.locals.get("actions", [None])[0]
+            done = self.locals["dones"][0]
+            info = self.locals["infos"][0]
+            if self.step_count % self.save_freq == 0:
+                # Get the current observation from the selected environment
+                obs = self.locals["new_obs"][0]  # Shape: (3, 84, 84)
+                
+                # Convert to HWC format for visualization
+                obs_hwc = np.transpose(obs, (1, 2, 0))
+                
+                # Create a figure to show the observation
+                plt.figure(figsize=(8, 8))
+                plt.imshow(obs_hwc)
+                plt.title(f"Observation at Step {self.step_count}")
+                plt.axis('off')
+                
+                # Add some metadata to the image
+                plt.figtext(0.5, 0.01, 
+                        f"Action: {action}, Reward: {self.locals['rewards'][0]:.2f}, Pellets Left: {info.get('pellets left', 170)}",
+                        ha="center", fontsize=10, weight='bold')
+                
+                # Log the figure to wandb
+                wandb.log({
+                    "observation/image": wandb.Image(plt.gcf(), caption=f"Step {self.step_count}"),
+                })
+                
+                plt.close()
             
-            # Convert to HWC format for visualization
-            obs_hwc = np.transpose(obs, (1, 2, 0))
+            # If episode is done, reset episode stats
+            if done:
+                # Log episode stats
+                wandb.log({
+                    "train/pellets_left": info.get("pellets left", 170)
+                })
+        except Exception as e:
+            print(f"Error logging metrics: {str(e)}")
+            import traceback
+            traceback.print_exc()
             
-            # Create a figure to show the observation
-            plt.figure(figsize=(8, 8))
-            plt.imshow(obs_hwc)
-            plt.title(f"Observation at Step {self.step_count}")
-            plt.axis('off')
-            
-            # Add some metadata to the image
-            plt.figtext(0.5, 0.01, 
-                       f"Action: {action}, Reward: {self.locals['rewards'][0]:.2f}, Pellets Left: {info.get('pellets left', 170)}",
-                       ha="center", fontsize=10, weight='bold')
-            
-            # Log the figure to wandb
-            wandb.log({
-                "observation/image": wandb.Image(plt.gcf(), caption=f"Step {self.step_count}"),
-            })
-            
-            plt.close()
-        
-        # If episode is done, reset episode stats
-        if done:
-            # Log episode stats
-            wandb.log({
-                "train/pellets_left": info.get("pellets left", 170)
-            })
-            
-        
         return True
     
     def _on_training_end(self):
