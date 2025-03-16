@@ -45,15 +45,46 @@ class PacmanInfoWrapper(gym.ObservationWrapper):
         # Convert back to channel-first format (C, H, W)
         return np.transpose(observation, (2, 0, 1))
 
-# Custom callback to log only relevant Pacman metrics
+# Custom callback to log only relevant Pacman metrics and handle video recording
 class PacmanMetricsCallback(BaseCallback):
-    def __init__(self, verbose=0, save_freq=100000):
+    def __init__(self, verbose=0, save_freq=100000, video_freq=None, video_length=200, save_model_freq=None):
         super().__init__(verbose)
         self.save_freq = save_freq
         self.step_count = 0
+        self.video_freq = video_freq
+        self.video_length = video_length
+        self.save_model_freq = save_model_freq
+        self.recording = False
+        self.frames_recorded = 0
+        self.video_count = 0
+        self.model_save_count = 0
+        self.temp_video_path = None
+        self.original_env = None
+        self.wrapped_env = None
+    
+    def _on_training_start(self):
+        # Store reference to the original environment
+        self.original_env = self.training_env
     
     def _on_step(self):
         self.step_count += 1
+        
+        # Check if it's time to start recording a video
+        if self.video_freq is not None and self.step_count % self.video_freq == 0 and not self.recording:
+            self.start_recording()
+        
+        # Check if it's time to save the model
+        if self.save_model_freq is not None and self.step_count % self.save_model_freq == 0:
+            self.save_model()
+        
+        # If we're recording, increment frame count
+        if self.recording:
+            self.frames_recorded += 1
+            # Check if we've recorded enough frames
+            if self.frames_recorded >= self.video_length:
+                self.stop_recording()
+        
+        # Regular metrics logging
         try:
             action = self.locals.get("actions", [None])[0]
             done = self.locals["dones"][0]
@@ -96,8 +127,69 @@ class PacmanMetricsCallback(BaseCallback):
             
         return True
     
+    def save_model(self):
+        """Save the model at the current checkpoint"""
+        self.model_save_count += 1
+        checkpoint_path = f"models/{wandb.run.id}/ppo-pacman-checkpoint-{self.step_count}"
+        print(f"Saving model checkpoint at step {self.step_count} to {checkpoint_path}")
+        
+        # Save the model
+        self.model.save(checkpoint_path)
+        
+        # Log to wandb
+        wandb.log({
+            "checkpoint/step": self.step_count,
+            "checkpoint/path": checkpoint_path
+        })
+        
+        # Optionally upload to Hugging Face
+        try:
+            repo_id = f"Tahahah/PacmanRL"
+            huggingface_hub.upload_file(
+                path_or_fileobj=checkpoint_path, 
+                path_in_repo=f"checkpoints/checkpoint-{self.step_count}", 
+                repo_id=repo_id, 
+                repo_type="model"
+            )
+            print(f"Uploaded checkpoint to Hugging Face: {repo_id}")
+        except Exception as e:
+            print(f"Error uploading to Hugging Face: {str(e)}")
+    
+    def start_recording(self):
+        print(f"Starting video recording at step {self.step_count}")
+        self.recording = True
+        self.frames_recorded = 0
+        self.video_count += 1
+        self.temp_video_path = f"videos/{wandb.run.id}/video_{self.video_count}.mp4"
+        os.makedirs(os.path.dirname(self.temp_video_path), exist_ok=True)
+        
+        # Temporarily wrap the environment with VecVideoRecorder
+        self.wrapped_env = VecVideoRecorder(
+            self.training_env,
+            self.temp_video_path,
+            record_video_trigger=lambda x: True,  # Always record
+            video_length=self.video_length
+        )
+        # Replace the training environment with the wrapped one
+        self.model.set_env(self.wrapped_env)
+    
+    def stop_recording(self):
+        print(f"Stopping video recording at step {self.step_count}")
+        self.recording = False
+        
+        # Restore the original environment
+        self.model.set_env(self.original_env)
+        
+        # Log the video to wandb
+        if os.path.exists(self.temp_video_path):
+            wandb.log({
+                f"video/training_video_{self.video_count}": wandb.Video(self.temp_video_path, fps=30, format="mp4")
+            })
+    
     def _on_training_end(self):
-        self.debug_log.close()
+        # Make sure we stop recording if training ends during recording
+        if self.recording:
+            self.stop_recording()
 
 # Function to create the environment
 def make_env():
@@ -120,12 +212,12 @@ def make_env():
 # Create vectorized environment
 env = make_vec_env(make_env, n_envs=8)
 
-# env = VecVideoRecorder(
-#     env,
-#     f"videos/{run.id}",
-#     record_video_trigger=lambda x: x % 2000 == 0,  # record every 200 steps
-#     video_length=200,  # each video is 200 frames long
-# )
+# Calculate video recording frequency (every 1/100th of total timesteps)
+video_freq = config["total_timesteps"] // 100
+video_length = 200  # each video is 200 frames long
+
+# Calculate model saving frequency (every 1/5th of total timesteps)
+save_model_freq = config["total_timesteps"] // 5
 
 # Check if CUDA is available and set device accordingly
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -182,7 +274,12 @@ except FileNotFoundError:
 
 # Create a list of callbacks
 callbacks = [
-    PacmanMetricsCallback(save_freq=100),  # Our custom metrics callback
+    PacmanMetricsCallback(
+        save_freq=video_freq // 10,        # Observation logging frequency
+        video_freq=video_freq,             # Video recording frequency
+        video_length=video_length,         # Length of each video
+        save_model_freq=save_model_freq    # Model saving frequency
+    ),
     WandbCallback(
         gradient_save_freq=100,
         model_save_path=f"models/{run.id}",
