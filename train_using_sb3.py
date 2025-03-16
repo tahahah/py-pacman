@@ -27,6 +27,18 @@ import os
 from src.env.pacman_env_new import PacmanEnv
 from wrappers import SkipFrame, GrayScaleObservation, ResizeObservation
 
+
+# Initialize wandb
+config = {
+    "policy_type": "CnnPolicy",
+    "total_timesteps": 20000000,
+    "env_name": "PacmanEnv",
+    "layout": "classic",
+    "n_steps": 256,
+    "batch_size": 256,  # Increased from 32 to 256 for better GPU utilization
+    "n_epochs": 4,
+}
+
 # Custom wrapper to add additional info and resize observations
 class PacmanInfoWrapper(gym.ObservationWrapper):
     def __init__(self, env, shape=(84, 84)):
@@ -230,16 +242,6 @@ if device == "cuda":
     # Set PyTorch to use the GPU
     torch.cuda.set_device(0)
 
-# Initialize wandb
-config = {
-    "policy_type": "CnnPolicy",
-    "total_timesteps": 20000000,
-    "env_name": "PacmanEnv",
-    "layout": "classic",
-    "n_steps": 256,
-    "batch_size": 256,  # Increased from 32 to 256 for better GPU utilization
-    "n_epochs": 4,
-}
 
 run = wandb.init(
     project="PacmanRL",
