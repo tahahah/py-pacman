@@ -57,44 +57,21 @@ class PacmanInfoWrapper(gym.ObservationWrapper):
         # Convert back to channel-first format (C, H, W)
         return np.transpose(observation, (2, 0, 1))
 
-# Custom callback to log only relevant Pacman metrics and handle video recording
+# Custom callback to log metrics and save model checkpoints
 class PacmanMetricsCallback(BaseCallback):
-    def __init__(self, verbose=0, save_freq=100000, video_freq=None, video_length=200, save_model_freq=None):
+    def __init__(self, verbose=0, save_freq=100000, save_model_freq=None):
         super().__init__(verbose)
         self.save_freq = save_freq
         self.step_count = 0
-        self.video_freq = video_freq
-        self.video_length = video_length
         self.save_model_freq = save_model_freq
-        self.recording = False
-        self.frames_recorded = 0
-        self.video_count = 0
         self.model_save_count = 0
-        self.temp_video_path = None
-        self.original_env = None
-        self.wrapped_env = None
-    
-    def _on_training_start(self):
-        # Store reference to the original environment
-        self.original_env = self.training_env
     
     def _on_step(self):
         self.step_count += 1
         
-        # Check if it's time to start recording a video
-        if self.video_freq is not None and self.step_count % self.video_freq == 0 and not self.recording:
-            self.start_recording()
-        
         # Check if it's time to save the model
         if self.save_model_freq is not None and self.step_count % self.save_model_freq == 0:
             self.save_model()
-        
-        # If we're recording, increment frame count
-        if self.recording:
-            self.frames_recorded += 1
-            # Check if we've recorded enough frames
-            if self.frames_recorded >= self.video_length:
-                self.stop_recording()
         
         # Regular metrics logging
         try:
@@ -141,67 +118,36 @@ class PacmanMetricsCallback(BaseCallback):
     
     def save_model(self):
         """Save the model at the current checkpoint"""
-        self.model_save_count += 1
-        checkpoint_path = f"models/{wandb.run.id}/ppo-pacman-checkpoint-{self.step_count}"
-        print(f"Saving model checkpoint at step {self.step_count} to {checkpoint_path}")
-        
-        # Save the model
-        self.model.save(checkpoint_path)
-        
-        # Log to wandb
-        wandb.log({
-            "checkpoint/step": self.step_count,
-            "checkpoint/path": checkpoint_path
-        })
-        
-        # Optionally upload to Hugging Face
         try:
-            repo_id = f"Tahahah/PacmanRL"
-            huggingface_hub.upload_file(
-                path_or_fileobj=checkpoint_path, 
-                path_in_repo=f"checkpoints/checkpoint-{self.step_count}", 
-                repo_id=repo_id, 
-                repo_type="model"
-            )
-            print(f"Uploaded checkpoint to Hugging Face: {repo_id}")
-        except Exception as e:
-            print(f"Error uploading to Hugging Face: {str(e)}")
-    
-    def start_recording(self):
-        print(f"Starting video recording at step {self.step_count}")
-        self.recording = True
-        self.frames_recorded = 0
-        self.video_count += 1
-        self.temp_video_path = f"videos/{wandb.run.id}/video_{self.video_count}.mp4"
-        os.makedirs(os.path.dirname(self.temp_video_path), exist_ok=True)
-        
-        # Temporarily wrap the environment with VecVideoRecorder
-        self.wrapped_env = VecVideoRecorder(
-            self.training_env,
-            self.temp_video_path,
-            record_video_trigger=lambda x: True,  # Always record
-            video_length=self.video_length
-        )
-        # Replace the training environment with the wrapped one
-        self.model.set_env(self.wrapped_env)
-    
-    def stop_recording(self):
-        print(f"Stopping video recording at step {self.step_count}")
-        self.recording = False
-        
-        # Restore the original environment
-        self.model.set_env(self.original_env)
-        
-        # Log the video to wandb
-        if os.path.exists(self.temp_video_path):
+            self.model_save_count += 1
+            checkpoint_path = f"models/{wandb.run.id}/ppo-pacman-checkpoint-{self.step_count}"
+            print(f"Saving model checkpoint at step {self.step_count} to {checkpoint_path}")
+            
+            # Save the model
+            self.model.save(checkpoint_path)
+            
+            # Log to wandb
             wandb.log({
-                f"video/training_video_{self.video_count}": wandb.Video(self.temp_video_path, fps=30, format="mp4")
+                "checkpoint/step": self.step_count,
+                "checkpoint/path": checkpoint_path
             })
-    
-    def _on_training_end(self):
-        # Make sure we stop recording if training ends during recording
-        if self.recording:
-            self.stop_recording()
+            
+            # Optionally upload to Hugging Face
+            try:
+                repo_id = f"Tahahah/PacmanRL"
+                huggingface_hub.upload_file(
+                    path_or_fileobj=checkpoint_path, 
+                    path_in_repo=f"checkpoints/checkpoint-{self.step_count}", 
+                    repo_id=repo_id, 
+                    repo_type="model"
+                )
+                print(f"Uploaded checkpoint to Hugging Face: {repo_id}")
+            except Exception as e:
+                print(f"Error uploading to Hugging Face: {str(e)}")
+        except Exception as e:
+            print(f"Error saving model: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 # Function to create the environment
 def make_env():
@@ -223,10 +169,6 @@ def make_env():
 
 # Create vectorized environment
 env = make_vec_env(make_env, n_envs=8)
-
-# Calculate video recording frequency (every 1/100th of total timesteps)
-video_freq = config["total_timesteps"] // 100
-video_length = 200  # each video is 200 frames long
 
 # Calculate model saving frequency (every 1/5th of total timesteps)
 save_model_freq = config["total_timesteps"] // 5
@@ -277,10 +219,8 @@ except FileNotFoundError:
 # Create a list of callbacks
 callbacks = [
     PacmanMetricsCallback(
-        save_freq=video_freq // 10,        # Observation logging frequency
-        video_freq=video_freq,             # Video recording frequency
-        video_length=video_length,         # Length of each video
-        save_model_freq=save_model_freq    # Model saving frequency
+        save_freq=100000,  # Observation logging frequency
+        save_model_freq=save_model_freq  # Model saving frequency
     ),
     WandbCallback(
         gradient_save_freq=100,
@@ -301,6 +241,66 @@ model.learn(
 model_name = f"models/{run.id}/ppo-pacman-final"
 model.save(model_name)
 
+# Run evaluation and record video
+print("Running model evaluation and recording video...")
+
+# Create a separate environment for evaluation
+eval_env = PacmanEnv(layout="classic", enable_render=True, render_mode="rgb_array", state_active=False, player_lives=3)
+eval_env = Monitor(eval_env)
+eval_env = SkipFrame(eval_env, skip=4)
+eval_env = GrayScaleObservation(eval_env)
+eval_env = ResizeObservation(eval_env, shape=(84, 84))
+eval_env = FrameStackObservation(eval_env, stack_size=4)
+
+# Create video directory
+video_dir = f"videos/{run.id}"
+os.makedirs(video_dir, exist_ok=True)
+video_path = f"{video_dir}/final_evaluation.mp4"
+
+# Wrap the environment with VecVideoRecorder
+eval_env = DummyVecEnv([lambda: eval_env])
+eval_env = VecVideoRecorder(
+    eval_env,
+    video_path,
+    record_video_trigger=lambda x: True,  # Always record
+    video_length=2000,  # Record a longer video for evaluation
+    name_prefix="final-evaluation"
+)
+
+# Load the trained model
+eval_model = PPO.load(model_name, env=eval_env)
+
+# Run evaluation
+obs, _ = eval_env.reset()
+done = False
+total_reward = 0
+step_count = 0
+max_steps = 2000  # Set a maximum number of steps
+
+print("Starting evaluation...")
+while step_count < max_steps:
+    action, _ = eval_model.predict(obs, deterministic=True)
+    obs, reward, terminated, truncated, info = eval_env.step(action)
+    total_reward += reward[0]
+    step_count += 1
+    done = terminated[0] or truncated[0]
+    if done:
+        print(f"Episode finished after {step_count} steps with reward {total_reward}")
+        break
+
+# Close the environment to ensure video is saved
+eval_env.close()
+
+# Log the video to wandb
+if os.path.exists(video_path):
+    print(f"Uploading evaluation video to wandb: {video_path}")
+    wandb.log({
+        "evaluation/video": wandb.Video(video_path, fps=30, format="mp4"),
+        "evaluation/total_reward": total_reward,
+        "evaluation/episode_length": step_count
+    })
+else:
+    print(f"Warning: Evaluation video not found at {video_path}")
 
 # Save the model to Hugging Face
 huggingface_hub.login(token=os.environ['HF_TOKEN'])
