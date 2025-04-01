@@ -271,7 +271,7 @@ eval_env = VecVideoRecorder(
 eval_model = PPO.load(model_name, env=eval_env)
 
 # Run evaluation
-obs, _ = eval_env.reset()
+obs = eval_env.reset()
 done = False
 total_reward = 0
 step_count = 0
@@ -280,10 +280,10 @@ max_steps = 2000  # Set a maximum number of steps
 print("Starting evaluation...")
 while step_count < max_steps:
     action, _ = eval_model.predict(obs, deterministic=True)
-    obs, reward, terminated, truncated, info = eval_env.step(action)
+    obs, reward, terminated, info = eval_env.step(action)
     total_reward += reward[0]
     step_count += 1
-    done = terminated[0] or truncated[0]
+    done = terminated[0]
     if done:
         print(f"Episode finished after {step_count} steps with reward {total_reward}")
         break
