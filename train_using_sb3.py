@@ -307,10 +307,10 @@ huggingface_hub.login(token=os.environ['HF_TOKEN'])
 
 repo_id = f"Tahahah/PacmanRL"
 try:
-    huggingface_hub.upload_file(path_or_fileobj=model_name, path_in_repo=f"checkpoints/{model_name}", repo_id=repo_id, repo_type="model")
+    huggingface_hub.upload_file(path_or_fileobj=model_name+".zip", path_in_repo=f"checkpoints/{model_name}", repo_id=repo_id, repo_type="model")
 except huggingface_hub.utils.RepositoryNotFoundError:
     huggingface_hub.create_repo(repo_id, repo_type="model")
-    huggingface_hub.upload_file(path_or_fileobj=model_name, path_in_repo=f"checkpoints/{model_name}", repo_id=repo_id, repo_type="model")
+    huggingface_hub.upload_file(path_or_fileobj=model_name+".zip", path_in_repo=f"checkpoints/{model_name}", repo_id=repo_id, repo_type="model")
 
 # Close the environment
 env.close()
