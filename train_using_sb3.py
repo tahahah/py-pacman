@@ -37,6 +37,12 @@ config = {
     "n_steps": 256,
     "batch_size": 256,  # Increased from 32 to 256 for better GPU utilization
     "n_epochs": 4,
+    "gamma": 0.99,  # Discount factor (default is 0.99)
+    "ent_coef": 0.01,  # Entropy coefficient - increased to encourage exploration
+    "learning_rate": 3e-4,  # Learning rate
+    "clip_range": 0.2,  # PPO clip range
+    "vf_coef": 0.5,  # Value function coefficient
+    "max_grad_norm": 0.5,  # Maximum gradient norm for gradient clipping
 }
 
 # Custom wrapper to add additional info and resize observations
@@ -210,6 +216,12 @@ except FileNotFoundError:
         n_steps=config["n_steps"],
         batch_size=config["batch_size"],
         n_epochs=config["n_epochs"],
+        gamma=config["gamma"],
+        ent_coef=config["ent_coef"],
+        learning_rate=config["learning_rate"],
+        clip_range=config["clip_range"],
+        vf_coef=config["vf_coef"],
+        max_grad_norm=config["max_grad_norm"],
         device=device,
         tensorboard_log=f"runs/{run.id}",
         policy_kwargs={"normalize_images": False}

@@ -164,7 +164,7 @@ class Game(object):
             self.clock.tick(60)
 
             # Add a small positive reward for each time step to encourage longer survival
-            self.add_reward(0.01)
+            self.add_reward(0.05)
 
     def event_loop(self):
         if self.game_mode in MOVE_MODES:
@@ -410,6 +410,9 @@ class Game(object):
                         self.consecutive_pellets += 1
 
                         if self.maze.get_number_of_pellets() == 0:
+                            # Add a substantial completion bonus when all pellets are cleared
+                            self.add_reward(50.0)  # Large completion bonus
+                            print("LEVEL COMPLETE! Adding completion bonus of 50.0")
                             self.set_mode(6)
                     elif self.maze.map_matrix[row][col] == 15:
                         # got a power pellet
