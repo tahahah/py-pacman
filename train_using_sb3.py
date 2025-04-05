@@ -204,7 +204,7 @@ os.makedirs(f"videos/{run.id}", exist_ok=True)
 os.makedirs(f"models/{run.id}", exist_ok=True)
 
 # Load a pretrained model if it exists, otherwise create a new one
-model_name = f"models/xask3fxp/ppo-pacman-final"
+model_name = f"models/bot3vy5v/ppo-pacman-final"
 try:
     model = PPO.load(model_name, env=env, device=device)
     print(f"Loaded pretrained model from {model_name}")
@@ -267,13 +267,13 @@ eval_env = FrameStackObservation(eval_env, stack_size=4)
 # Create video directory
 video_dir = f"videos/{run.id}"
 os.makedirs(video_dir, exist_ok=True)
-video_path = f"{video_dir}/final_evaluation.mp4"
+video_path = f"{video_dir}/final-evaluation-step-0-to-step-2000.mp4"
 
 # Wrap the environment with VecVideoRecorder
 eval_env = DummyVecEnv([lambda: eval_env])
 eval_env = VecVideoRecorder(
     eval_env,
-    video_path,
+    video_dir,
     record_video_trigger=lambda x: True,  # Always record
     video_length=2000,  # Record a longer video for evaluation
     name_prefix="final-evaluation"
