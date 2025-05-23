@@ -156,6 +156,32 @@ class PacmanMetricsCallback(BaseCallback):
             import traceback
             traceback.print_exc()
 
+
+class SaveVecNormalizeOnBest(BaseCallback):
+    """
+    Callback for saving the VecNormalize statistics when a new best model is found.
+    :param best_model_save_path: Path to the directory where the best model is saved.
+    """
+    def __init__(self, best_model_save_path: str, verbose: int = 0):
+        super().__init__(verbose)
+        self.best_model_save_path = best_model_save_path
+
+    def _on_step(self) -> bool:
+        """
+        This method will be called by the EvalCallback when a new best model is found.
+        """
+        if self.verbose > 0:
+            print(f"New best model, saving VecNormalize stats to {os.path.join(self.best_model_save_path, 'vecnormalize.pkl')}")
+        # self.model is the PPO model, .get_vec_normalize_env() gets the VecNormalize wrapper from the training env
+        vec_normalize_env = self.model.get_vec_normalize_env()
+        if vec_normalize_env is not None:
+            vec_normalize_env.save(os.path.join(self.best_model_save_path, "vecnormalize.pkl"))
+        else:
+            if self.verbose > 0:
+                print("Warning: VecNormalize environment not found, cannot save stats.")
+        return True
+
+
 # Function to create the environment
 def make_env():
     # Create base environment
@@ -184,9 +210,9 @@ env = VecNormalize(raw_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 # or pass a VecNormalize instance that will be synced.
 # The key is that the model expects observations normalized by the *training* env's stats.
 # We will ensure the EvalCallback saves the *training* env's stats.
-eval_env_for_callback = make_vec_env(make_env, n_envs=1)
-# We will pass this raw env to EvalCallback. The callback will use the model's normalization stats implicitly during prediction.
-# The VecNormalize stats saved will be from the training env.
+eval_raw_env = make_vec_env(make_env, n_envs=1)
+eval_env_for_callback = VecNormalize(eval_raw_env, norm_obs=True, norm_reward=False, training=False, clip_obs=10.0)
+# The stats from the training 'env' will be synced to this 'eval_env_for_callback' by EvalCallback
 
 # Calculate model saving frequency (every 1/5th of total timesteps)
 save_model_freq = config["total_timesteps"] // 5
@@ -279,20 +305,22 @@ callbacks = [
 # Setup evaluation callback
 # This will save the best model according to the evaluation environment
 # and log evaluation metrics
-eval_callback = EvalCallback(
-    eval_env_for_callback, # Pass the raw environment for evaluation 
+# Create the callback to save VecNormalize stats on new best model
+save_vec_normalize_callback = SaveVecNormalizeOnBest(
     best_model_save_path=f"models/{run.id}/best_model/",
-    log_path=f"models/{run.id}/eval_logs/", 
-    eval_freq=max(config["n_steps"] * 8 // 10, 1), # Evaluate 10 times per training run, or at least once
+    verbose=1
+)
+
+eval_callback = EvalCallback(
+    eval_env_for_callback, # Pass the raw environment for evaluation
+    best_model_save_path=f"models/{run.id}/best_model/",
+    log_path=f"models/{run.id}/eval_logs/",
+    eval_freq=max(config["n_steps"] * 8 // env.num_envs, 1), # Evaluate more frequently
     n_eval_episodes=5,
-    deterministic=True, 
+    deterministic=True,
     render=False,
-    callback_on_new_best=None, # Could add a custom callback here if needed
-    # When a new best model is found, save the VecNormalize stats
-    # This is crucial for loading the model later with the correct normalization
-    # When a new best model is found by EvalCallback, save the VecNormalize stats of the *training* environment.
-    # self.model.get_vec_normalize_env() should give the training VecNormalize instance.
-    callback_after_eval=lambda: self.model.get_vec_normalize_env().save(os.path.join(self.best_model_save_path, "vecnormalize.pkl"))
+    callback_on_new_best=save_vec_normalize_callback, # Use the new callback here
+    callback_after_eval=None   # Keep this as None
 )
 
 callbacks.append(eval_callback)
