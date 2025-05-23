@@ -408,9 +408,11 @@ class Game(object):
                         self.pellet_snd_num = 1 - self.pellet_snd_num
                         self.add_score(10)
                         self.consecutive_pellets += 1
-                        self.add_reward(1 + self.consecutive_pellets * 0.5)  # Increased reward for consecutive pellets
 
                         if self.maze.get_number_of_pellets() == 0:
+                            # Add a substantial completion bonus when all pellets are cleared
+                            self.add_reward(50.0)  # Large completion bonus
+                            print("LEVEL COMPLETE! Adding completion bonus of 50.0")
                             self.set_mode(6)
                     elif self.maze.map_matrix[row][col] == 15:
                         # got a power pellet
@@ -451,7 +453,6 @@ class Game(object):
                 if ghost.state == GhostState.normal:
                     self.set_mode(GameMode.hit_ghost)
                     self.add_reward(-5)
-                    self.add_reward(-self.maze.get_number_of_pellets()*0.2)
                 elif ghost.state == GhostState.vulnerable:
                     self.add_score(ghost.value)
                     self.add_reward(5)
