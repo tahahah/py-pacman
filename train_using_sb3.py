@@ -141,9 +141,10 @@ class PacmanMetricsCallback(BaseCallback):
             # Optionally upload to Hugging Face
             try:
                 repo_id = f"Tahahah/PacmanRL"
+                actual_checkpoint_file_path = checkpoint_path + ".zip"
                 huggingface_hub.upload_file(
-                    path_or_fileobj=checkpoint_path, 
-                    path_in_repo=f"checkpoints/checkpoint-{self.step_count}", 
+                    path_or_fileobj=actual_checkpoint_file_path, 
+                    path_in_repo=f"checkpoints/checkpoint-{self.step_count}.zip", 
                     repo_id=repo_id, 
                     repo_type="model"
                 )
@@ -178,11 +179,14 @@ raw_env = make_vec_env(make_env, n_envs=8)
 # Normalize observations and rewards
 env = VecNormalize(raw_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-# Create a separate environment for evaluation, also normalized but using stats from training env
-# It's important to use the same normalization stats for the eval env
-# We will save these stats alongside the best model
-eval_env = make_vec_env(make_env, n_envs=1)
-eval_env = VecNormalize(eval_env, training=False, norm_obs=True, norm_reward=False, clip_obs=10.0)
+# Create a separate, raw environment for evaluation (will be wrapped by EvalCallback's logic if needed)
+# For VecNormalize, it's often better to let EvalCallback handle the eval_env's normalization
+# or pass a VecNormalize instance that will be synced.
+# The key is that the model expects observations normalized by the *training* env's stats.
+# We will ensure the EvalCallback saves the *training* env's stats.
+eval_env_for_callback = make_vec_env(make_env, n_envs=1)
+# We will pass this raw env to EvalCallback. The callback will use the model's normalization stats implicitly during prediction.
+# The VecNormalize stats saved will be from the training env.
 
 # Calculate model saving frequency (every 1/5th of total timesteps)
 save_model_freq = config["total_timesteps"] // 5
@@ -212,10 +216,33 @@ os.makedirs(f"videos/{run.id}", exist_ok=True)
 os.makedirs(f"models/{run.id}", exist_ok=True)
 
 # Load a pretrained model if it exists, otherwise create a new one
-model_name = f"models/bot3vy5v/ppo-pacman-final"
+pretrained_model_load_path_prefix = "models/bot3vy5v/ppo-pacman-final" # This is a path prefix
+pretrained_model_zip_path = f"{pretrained_model_load_path_prefix}.zip"
+
 try:
-    model = PPO.load(model_name, env=env, device=device)
-    print(f"Loaded pretrained model from {model_name}")
+    # Check for VecNormalize stats associated with the pretrained model
+    pretrained_vec_normalize_stats_path = f"{pretrained_model_load_path_prefix}_vecnormalize.pkl"
+    
+    current_env_is_vec_normalize = isinstance(env, VecNormalize)
+    
+    if os.path.exists(pretrained_model_zip_path):
+        if os.path.exists(pretrained_vec_normalize_stats_path) and current_env_is_vec_normalize:
+            print(f"Loading VecNormalize stats for pretrained model from: {pretrained_vec_normalize_stats_path}")
+            # Load stats into the existing 'env' VecNormalize wrapper.
+            # 'raw_env' is the original DummyVecEnv that 'env' wraps.
+            env = VecNormalize.load(pretrained_vec_normalize_stats_path, raw_env) # raw_env is the underlying non-normalized env stack
+            env.training = True # Ensure it's in training mode for subsequent learning
+            print(f"Successfully loaded and applied VecNormalize stats to the training environment.")
+        elif current_env_is_vec_normalize:
+            print(f"VecNormalize stats not found at {pretrained_vec_normalize_stats_path} for pretrained model, but model file exists.")
+            print("The existing VecNormalize wrapper on 'env' will be used, which will learn stats from scratch if not already learned.")
+        
+        print(f"Loading pretrained model from {pretrained_model_zip_path}")
+        model = PPO.load(pretrained_model_zip_path, env=env, device=device, custom_objects={'learning_rate': config['learning_rate'], 'ent_coef': config['ent_coef']}) # Pass env which might now have loaded stats
+        print(f"Successfully loaded pretrained model.")
+    else:
+        raise FileNotFoundError # Pretrained model zip not found, proceed to create new
+
 except FileNotFoundError:
     model = PPO(
         config["policy_type"], 
@@ -253,7 +280,7 @@ callbacks = [
 # This will save the best model according to the evaluation environment
 # and log evaluation metrics
 eval_callback = EvalCallback(
-    eval_env, 
+    eval_env_for_callback, # Pass the raw environment for evaluation 
     best_model_save_path=f"models/{run.id}/best_model/",
     log_path=f"models/{run.id}/eval_logs/", 
     eval_freq=max(config["n_steps"] * 8 // 10, 1), # Evaluate 10 times per training run, or at least once
@@ -263,7 +290,9 @@ eval_callback = EvalCallback(
     callback_on_new_best=None, # Could add a custom callback here if needed
     # When a new best model is found, save the VecNormalize stats
     # This is crucial for loading the model later with the correct normalization
-    callback_after_eval=lambda: eval_env.save(os.path.join(f"models/{run.id}/best_model/", "vecnormalize.pkl"))
+    # When a new best model is found by EvalCallback, save the VecNormalize stats of the *training* environment.
+    # self.model.get_vec_normalize_env() should give the training VecNormalize instance.
+    callback_after_eval=lambda: self.model.get_vec_normalize_env().save(os.path.join(self.best_model_save_path, "vecnormalize.pkl"))
 )
 
 callbacks.append(eval_callback)
@@ -277,10 +306,12 @@ model.learn(
 )
 
 # Save the final model and VecNormalize stats
-final_model_path = f"models/{run.id}/ppo-pacman-final"
-model.save(final_model_path)
-# Save the VecNormalize statistics
-env.save(os.path.join(final_model_path, "vecnormalize.pkl"))
+final_model_path_prefix = f"models/{run.id}/ppo-pacman-final"
+model.save(final_model_path_prefix) # Saves as final_model_path_prefix.zip
+# Save the VecNormalize statistics alongside the model zip file
+env.save(f"{final_model_path_prefix}_vecnormalize.pkl")
+
+final_model_zip_path = f"{final_model_path_prefix}.zip" # Actual path to the zip file
 
 # Note: When loading the model, you'll need to load the VecNormalize stats as well
 # Example:
@@ -296,64 +327,81 @@ env.save(os.path.join(final_model_path, "vecnormalize.pkl"))
 # Run evaluation and record video
 print("Running model evaluation and recording video...")
 
-# Create a separate environment for evaluation
-eval_env = PacmanEnv(layout="classic", enable_render=True, render_mode="rgb_array", state_active=False, player_lives=3)
-eval_env = Monitor(eval_env)
-eval_env = SkipFrame(eval_env, skip=4)
-eval_env = GrayScaleObservation(eval_env)
-eval_env = ResizeObservation(eval_env, shape=(84, 84))
-eval_env = FrameStackObservation(eval_env, stack_size=4)
+# Create a raw environment for video evaluation
+video_eval_raw_env = PacmanEnv(layout="classic", enable_render=True, render_mode="rgb_array", state_active=False, player_lives=3)
+video_eval_raw_env = Monitor(video_eval_raw_env)
+video_eval_raw_env = SkipFrame(video_eval_raw_env, skip=4)
+video_eval_raw_env = GrayScaleObservation(video_eval_raw_env)
+video_eval_raw_env = ResizeObservation(video_eval_raw_env, shape=(84, 84))
+video_eval_raw_env = FrameStackObservation(video_eval_raw_env, stack_size=4)
+
+# Wrap in DummyVecEnv before VecNormalize.load
+video_eval_dummy_env = DummyVecEnv([lambda: video_eval_raw_env])
+
+# Load the VecNormalize stats saved with the final model
+vec_normalize_stats_path_for_final_model = f"{final_model_path_prefix}_vecnormalize.pkl"
+
+if os.path.exists(vec_normalize_stats_path_for_final_model):
+    print(f"Loading VecNormalize stats for video evaluation from: {vec_normalize_stats_path_for_final_model}")
+    video_eval_normalized_env = VecNormalize.load(vec_normalize_stats_path_for_final_model, video_eval_dummy_env)
+    video_eval_normalized_env.training = False  # Set to evaluation mode
+    video_eval_normalized_env.norm_reward = False # Don't normalize rewards for pure evaluation
+else:
+    print(f"WARNING: VecNormalize stats not found at {vec_normalize_stats_path_for_final_model}. Video evaluation will use unnormalized observations.")
+    video_eval_normalized_env = video_eval_dummy_env # Fallback, likely suboptimal
+
+# Wrap the normalized environment with VecVideoRecorder for the final evaluation
+video_output_folder = f"videos/{run.id}/final_eval/"
+os.makedirs(video_output_folder, exist_ok=True)
+video_eval_vec_env_recorded = VecVideoRecorder(
+    video_eval_normalized_env, 
+    video_output_folder, 
+    record_video_trigger=lambda x: x == 0, # Record the first episode
+    video_length=2000, # Max length of video, can be adjusted
+    name_prefix=f"final-ppo-pacman-{run.id}"
+)
+
+# Evaluate the final model with video recording
+print("Evaluating final model and recording video...")
+# Load the model with the video-recorded environment
+# Note: The model was already saved as 'final_model_zip_path'. We load it here for evaluation with the video recorder.
+final_model_for_eval = PPO.load(final_model_zip_path, env=video_eval_vec_env_recorded, device=device)
+
+# The evaluate_policy call will trigger the VideoRecorder to save the video.
+mean_reward, std_reward = evaluate_policy(final_model_for_eval, video_eval_vec_env_recorded, n_eval_episodes=1, deterministic=True, render=False, callback=None)
+print(f"Final evaluation: Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+
+# Close the video recorder to ensure the video file is finalized
+video_eval_vec_env_recorded.close() 
+
+# Log the recorded video to WandB
+# The VecVideoRecorder saves files in the specified video_output_folder.
+# Let's try to find the most recent mp4 file in that folder.
+if os.path.exists(video_output_folder):
+    video_files = [os.path.join(video_output_folder, f) for f in os.listdir(video_output_folder) if f.endswith(".mp4")]
+    if video_files:
+        latest_video_file = max(video_files, key=os.path.getctime)
+        print(f"Logging video {latest_video_file} to WandB.")
+        wandb.log({"evaluation/video": wandb.Video(latest_video_file, fps=15, format="mp4"),
+                   "evaluation/mean_reward": mean_reward}) # fps can be adjusted
+    else:
+        print(f"No video files found in {video_output_folder} to log to WandB.")
+else:
+    print(f"Video folder {video_output_folder} not found. Cannot log video.")
+
 
 # Create video directory
 video_dir = f"videos/{run.id}"
 os.makedirs(video_dir, exist_ok=True)
-video_path = f"{video_dir}/final-evaluation-step-0-to-step-2000.mp4"
 
-# Wrap the environment with VecVideoRecorder
-eval_env = DummyVecEnv([lambda: eval_env])
-eval_env = VecVideoRecorder(
-    eval_env,
+# Wrap the NORMALIZED environment with VecVideoRecorder
+video_eval_vec_env = VecVideoRecorder(
+    video_eval_normalized_env, # Use the normalized environment
     video_dir,
     record_video_trigger=lambda x: True,  # Always record
     video_length=2000,  # Record a longer video for evaluation
     name_prefix="final-evaluation"
 )
-
-# Load the trained model
-eval_model = PPO.load(model_name, env=eval_env)
-
-# Run evaluation
-obs = eval_env.reset()
-done = False
-total_reward = 0
-step_count = 0
-max_steps = 2000  # Set a maximum number of steps
-
-print("Starting evaluation...")
-while step_count < max_steps:
-    action, _ = eval_model.predict(obs, deterministic=True)
-    obs, reward, terminated, info = eval_env.step(action)
-    total_reward += reward[0]
-    step_count += 1
-    done = terminated[0]
-    if done:
-        print(f"Episode finished after {step_count} steps with reward {total_reward}")
-        break
-
-# Close the environment to ensure video is saved
-eval_env.close()
-
-# Log the video to wandb
-if os.path.exists(video_path):
-    print(f"Uploading evaluation video to wandb: {video_path}")
-    wandb.log({
-        "evaluation/video": wandb.Video(video_path, fps=30, format="mp4"),
-        "evaluation/total_reward": total_reward,
-        "evaluation/episode_length": step_count
-    })
-else:
-    print(f"Warning: Evaluation video not found at {video_path}")
-
 # Save the model to Hugging Face
 huggingface_hub.login(token=os.environ['HF_TOKEN'])
 
