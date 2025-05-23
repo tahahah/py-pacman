@@ -4,10 +4,10 @@ import torch
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import VecTransposeImage, DummyVecEnv, VecVideoRecorder
+from stable_baselines3.common.vec_env import VecTransposeImage, DummyVecEnv, VecVideoRecorder, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.preprocessing import is_image_space
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from gymnasium import spaces
 import matplotlib.pyplot as plt
 import gymnasium as gym
@@ -123,7 +123,15 @@ def make_env():
     return env
 
 # Create vectorized environment
-env = make_vec_env(make_env, n_envs=8)
+raw_env = make_vec_env(make_env, n_envs=8)
+# Normalize observations and rewards
+env = VecNormalize(raw_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+
+# Create a separate environment for evaluation, also normalized but using stats from training env
+# It's important to use the same normalization stats for the eval env
+# We will save these stats alongside the best model
+eval_env = make_vec_env(make_env, n_envs=1)
+eval_env = VecNormalize(eval_env, training=False, norm_obs=True, norm_reward=False, clip_obs=10.0)
 
 # env = VecVideoRecorder(
 #     env,
@@ -189,6 +197,25 @@ callbacks = [
     )
 ]
 
+# Setup evaluation callback
+# This will save the best model according to the evaluation environment
+# and log evaluation metrics
+eval_callback = EvalCallback(
+    eval_env, 
+    best_model_save_path=f"models/{run.id}/best_model/",
+    log_path=f"models/{run.id}/eval_logs/", 
+    eval_freq=max(config["n_steps"] * 8 // 10, 1), # Evaluate 10 times per training run, or at least once
+    n_eval_episodes=5,
+    deterministic=True, 
+    render=False,
+    callback_on_new_best=None, # Could add a custom callback here if needed
+    # When a new best model is found, save the VecNormalize stats
+    # This is crucial for loading the model later with the correct normalization
+    callback_after_eval=lambda: eval_env.save(os.path.join(f"models/{run.id}/best_model/", "vecnormalize.pkl"))
+)
+
+callbacks.append(eval_callback)
+
 # Train the model with our callbacks
 model.learn(
     total_timesteps=config["total_timesteps"], 
@@ -197,9 +224,22 @@ model.learn(
     callback=callbacks
 )
 
-# Save the final model
-model_name = f"models/{run.id}/ppo-pacman-final"
-model.save(model_name)
+# Save the final model and VecNormalize stats
+final_model_path = f"models/{run.id}/ppo-pacman-final"
+model.save(final_model_path)
+# Save the VecNormalize statistics
+env.save(os.path.join(final_model_path, "vecnormalize.pkl"))
+
+# Note: When loading the model, you'll need to load the VecNormalize stats as well
+# Example:
+# model = PPO.load("path_to_model")
+# env = VecNormalize.load("path_to_vecnormalize.pkl", DummyVecEnv([make_env]))
+# env.training = False # Important for evaluation
+# obs = env.reset()
+# while True:
+#     action, _states = model.predict(obs, deterministic=True)
+#     obs, rewards, dones, info = env.step(action)
+#     env.render()
 
 
 # Save the model to Hugging Face
